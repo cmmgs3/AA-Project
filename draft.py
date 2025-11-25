@@ -1,6 +1,6 @@
 import random
 import time
-
+import tkinter as tk
 
 class Object:
     def __init__(self, x, y, name):
@@ -82,6 +82,7 @@ class CircularSensor(Sensor):
             x, y = (agente.x + (modifier[0] * i), agente.y + (modifier[1] * i))
             obj = ambiente.objects.get((x,y))
             if obj is not None:
+                #TODO maybe distancia?
                 seen.append(obj.name)
 
         if not seen:
@@ -155,6 +156,7 @@ class Ambiente:
         if isinstance(accao, Accao) and isinstance(agente, Agent):
             accao.act(agente, self)
 
+    # Não se usa toList() porque o GUI tem acesso direto ao mapa
     def toList(self):
         matrix = [["." for y in range(self.size)] for x in range(self.size)]
         for obj in self.objects.values():
@@ -178,24 +180,154 @@ class Simulador:
         for agent in self.listaAgentes:
             print(agent)
 
+    # O mesmo que no main.py
     def executa(self):
         directions = ["up", "down", "left", "right"]
-        while True:
-            self.ambiente.print()
-            for agent in self.listaAgentes:
-                observacao = self.ambiente.observacaoPara(agent)
-                agent.observacao(observacao)
-                agent.printObservacao()
-                move = Move(random.choice(directions))
-                self.ambiente.agir(move, agent)
-            self.ambiente.atualizacao()
-            time.sleep(1)
+        # 2. Ação
+        for agent in self.listaAgentes:
+            move = Move(random.choice(directions))
+            self.ambiente.agir(move, agent)
+        # 1. Percepção
+        for agent in self.listaAgentes:
+            observacao = self.ambiente.observacaoPara(agent)
+            agent.observacao(observacao)
+            # agent.printObservacao() # Opcional, suja o console
+
+        self.ambiente.atualizacao()
+
+class SimulationGUI:
+    def __init__(self, master, simulador):
+        self.master = master
+        self.simulador = simulador
+        self.ambiente = simulador.ambiente
+        self.running = False
+
+        master.title("Simulação Multi-Agente")
+        master.configure(bg='#f0f0f0')
+
+        #Layout Principa
+        self.main_frame = tk.Frame(master, padx=15, pady=15, bg='#f0f0f0')
+        self.main_frame.pack(fill="both", expand=True)
+
+        # Frame do Mapa (Esquerda)
+        self.map_frame = tk.Frame(self.main_frame, padx=10, pady=10, bg='#ffffff', relief=tk.RAISED, borderwidth=2)
+        self.map_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        # Frame de Informação (Direita)
+        self.info_frame = tk.Frame(self.main_frame, padx=10, pady=10, bg='#e0e0e0', relief=tk.RIDGE, borderwidth=1)
+        self.info_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+
+        self.main_frame.grid_columnconfigure(0, weight=1)
+        self.main_frame.grid_columnconfigure(1, weight=1)
+        self.main_frame.grid_rowconfigure(0, weight=1)
+
+        # Grelha do Mapa
+        self.cells = []
+        for r in range(self.ambiente.size):
+            row_cells = []
+            for c in range(self.ambiente.size):
+                cell = tk.Label(self.map_frame, text=".", width=4, height=2,
+                                borderwidth=1, relief="ridge", font=('Arial', 10, 'bold'),
+                                fg='#cccccc', bg='#ffffff')
+                cell.grid(row=r, column=c, padx=1, pady=1)
+                row_cells.append(cell)
+            self.cells.append(row_cells)
+
+        # Botões de Controlo
+        self.control_frame = tk.Frame(self.info_frame, bg='#e0e0e0')
+        self.control_frame.pack(pady=10, fill='x')
+
+        self.start_button = tk.Button(self.control_frame, text="▶ Iniciar", command=self.start_simulation,
+                                      bg='#4CAF50', fg='white', font=('Arial', 10, 'bold'), relief=tk.RAISED)
+        self.start_button.pack(side=tk.LEFT, expand=True, padx=5)
+
+        self.stop_button = tk.Button(self.control_frame, text="■ Parar", command=self.stop_simulation,
+                                     state=tk.DISABLED, bg='#F44336', fg='white', font=('Arial', 10, 'bold'),
+                                     relief=tk.RAISED)
+        self.stop_button.pack(side=tk.LEFT, expand=True, padx=5)
+
+        # Caixa de Texto para Visão
+        tk.Label(self.info_frame, text="👁 Perceção (Sensores)",
+                 font=('Arial', 12, 'bold'), bg='#e0e0e0', fg='#333333').pack(pady=(15, 5))
+
+        self.vision_text = tk.Text(self.info_frame, height=20, width=35, state=tk.DISABLED,
+                                   font=('Consolas', 9), bg='#ffffff', fg='#000000', relief=tk.FLAT)
+        self.vision_text.pack(pady=5, fill='both', expand=True)
+
+        self.update_gui()
+
+    def update_gui(self):
+        for r in range(self.ambiente.size):
+            for c in range(self.ambiente.size):
+                obj = self.ambiente.objects.get((c, r))  # Nota: get((x, y))
+
+                text = "."
+                bg_color = '#ffffff'
+                fg_color = '#eeeeee'
+
+                if obj:
+                    text = obj.name
+                    if isinstance(obj, Agent):
+                        bg_color = '#4DD0E1'  # Azul
+                        fg_color = 'black'
+                    elif isinstance(obj, Obstacle):
+                        bg_color = '#757575'  # Cinzento
+                        fg_color = 'white'
+                    elif isinstance(obj, Objective):
+                        bg_color = '#8BC34A'  # Verde
+                        fg_color = 'black'
+
+                self.cells[r][c].config(text=text, bg=bg_color, fg=fg_color,
+                                        relief='raised' if obj else 'ridge')
+
+        # 2. Atualizar Texto de Perceção
+        self.vision_text.config(state=tk.NORMAL)
+        self.vision_text.delete(1.0, tk.END)
+
+        for agent in self.simulador.listaAgentes:
+            self.vision_text.insert(tk.END, f"Agente {agent.name}:\n", 'header')
+
+            obs = agent.ultima_observacao
+            if obs:
+                for direction, items in obs.items():
+                    self.vision_text.insert(tk.END, f"  {direction}: ")
+                    if items:
+                        # items é uma lista de strings, ex: ['□', 'A']
+                        self.vision_text.insert(tk.END, f"{', '.join(items)}\n")
+                    else:
+                        self.vision_text.insert(tk.END, "-\n", 'dim')
+            else:
+                self.vision_text.insert(tk.END, "  (Sem dados)\n", 'dim')
+            self.vision_text.insert(tk.END, "\n")
+
+        self.vision_text.tag_config('header', foreground='blue', font=('Arial', 10, 'bold'))
+        self.vision_text.tag_config('dim', foreground='gray')
+        self.vision_text.config(state=tk.DISABLED)
+
+    def run_step(self):
+        if self.running:
+            self.simulador.executa()
+            self.update_gui()
+            self.master.after(1000, self.run_step)  # Loop
+
+    def start_simulation(self):
+        if not self.running:
+            self.running = True
+            self.start_button.config(state=tk.DISABLED)
+            self.stop_button.config(state=tk.NORMAL)
+            self.run_step()
+
+    def stop_simulation(self):
+        self.running = False
+        self.start_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
 
 if __name__ == "__main__":
     la = []
     agent1 = Agent(0, 1, "A")
     agent1.instala(CircularSensor(2))
     agent2 = Agent(0, 2, "B")
+    agent2.instala(CircularSensor(1))
     la.append(agent1)
     la.append(agent2)
     amb = Ambiente(9)
@@ -204,4 +336,8 @@ if __name__ == "__main__":
     amb.add_object(Obstacle(2,3))
     amb.add_object(Obstacle(3,3))
     simulador = Simulador(la, amb)
-    simulador.executa()
+
+    root = tk.Tk()
+    gui = SimulationGUI(root, simulador)
+    root.mainloop()
+    #simulador.executa()
