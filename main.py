@@ -1,22 +1,55 @@
 import random
 import time
 
+
 class Object:
     def __init__(self, x, y, name):
         self.x = x
         self.y = y
         self.name = name
+
     def __str__(self):
         return f'{self.x} {self.y} {self.name}'
+
     def intersect(self):
         return True
+
 
 class Agent(Object):
     def __init__(self, x, y, name):
         super().__init__(x, y, name)
+
+    def watch_environment(self, w):
+        vision_range = 5
+        up_list = []
+        for i in range(1, vision_range):
+            objs = w.get_at(self.x, self.y + i)
+            if objs is not None:
+                for obj in objs:
+                    up_list.append((obj.name, i))
+        right_list = []
+        for i in range(1, vision_range):
+            objs = w.get_at(self.x + i, self.y)
+            if objs is not None:
+                for obj in objs:
+                    right_list.append((obj.name, i))
+        down_list = []
+        for i in range(1, vision_range):
+            objs = w.get_at(self.x, self.y - i)
+            if objs is not None:
+                for obj in objs:
+                    down_list.append((obj.name, i))
+        left_list = []
+        for i in range(1, vision_range):
+            objs = w.get_at(self. x - i, self.y)
+            if objs is not None:
+                for obj in objs:
+                    left_list.append((obj.name, i))
+        return {"up": up_list, "down": down_list, "left": left_list, "right": right_list}
+
     def move_random(self, w):
         size = w.size
-        directions =["up", "down", "left", "right"]
+        directions = ["up", "down", "left", "right"]
         while True:
             move = random.choice(directions)
             if move == "up" and self.y > 0:
@@ -32,23 +65,41 @@ class Agent(Object):
                 w.move(self, self.x + 1, self.y)
                 break
 
+    def printvision(self, vision, direction):
+        if vision is not None:
+            items = vision.get(direction)
+            print(direction + ":")
+            if items is not None:
+                for item in items:
+                    name = item[0]
+                    distance = item[1]
+                    print(name +  " at%2d spaces"%distance)
+
+
+
 
     def __str__(self):
         return f'Agent: {self.x} {self.y} {self.name}'
 
+
 class Objective(Object):
     def __init__(self, x, y):
         super().__init__(x, y, '*')
+
     def __str__(self):
         return f'Objective: {self.x} {self.y}'
+
     def intersect(self):
         return True
+
 
 class Obstacle(Object):
     def __init__(self, x, y):
         super().__init__(x, y, '⬛')
+
     def __str__(self):
         return f'Obstacle: {self.x} {self.y}'
+
     def intersect(self):
         return False
 
@@ -58,6 +109,7 @@ class World:
         self.objects = {}
         self.size = size
         self.agents = []
+
     def add_object(self, o):
         target_pos = (o.x, o.y)
         if self.objects.get(target_pos) is None:
@@ -70,9 +122,10 @@ class World:
 
     def get_at(self, x, y):
         return self.objects.get((x, y))
+
     def move(self, agent, x, y):
         current_pos = (agent.x, agent.y)
-        target_pos = (x,y)
+        target_pos = (x, y)
 
         if current_pos == target_pos:
             return False
@@ -84,8 +137,7 @@ class World:
                 can_move = can_move and obj.intersect
 
         if can_move:
-            objs_at_current_pos = self.objects.get(current_pos)
-            objs_at_current_pos.remove(agent)
+            self.objects.get(current_pos).remove(agent)
             agent.x = x
             agent.y = y
             self.add_object(agent)
@@ -100,14 +152,22 @@ class World:
                     matrix[obj.x][obj.y] = obj.name
         for row in matrix:
             print(' '.join(row))
+
     def update(self):
         for agent in self.agents:
+            print("Agent " + agent.name + " moving")
             agent.move_random(self)
+            print("Agent " + agent.name + " sensing")
+            vision = agent.watch_environment(self)
+            agent.printvision(vision, "up")
+            agent.printvision(vision, "down")
+            agent.printvision(vision, "left")
+            agent.printvision(vision, "right")
 
 
 if __name__ == '__main__':
     print("Hello World")
-    world = World(3)
+    world = World(7)
     world.add_object(Agent(0, 1, "A"))
     world.add_object(Agent(0, 2, "B"))
     while True:
@@ -115,4 +175,3 @@ if __name__ == '__main__':
         world.display()
         time.sleep(1)
         print('\n')
-
