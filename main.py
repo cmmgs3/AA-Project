@@ -19,32 +19,38 @@ class Agent(Object):
     def __init__(self, x, y, name):
         super().__init__(x, y, name)
 
-    def watch_environment(self, w):
+    def watch_direction(self, w, direction):
         vision_range = 5
-        up_list = []
+        seen = []
+
+        if direction == "up":
+            modifier = (0, -1)
+        elif direction == "down":
+            modifier = (0, 1)
+        elif direction == "right":
+            modifier = (1, 0)
+        elif direction == "left":
+            modifier = (-1, 0)
+        else:
+            return None
+
         for i in range(1, vision_range):
-            objs = w.get_at(self.x, self.y + i)
+            x, y = (self.x + (modifier[0] * i), self.y + (modifier[1] * i))
+            objs = w.get_at(x, y)
             if objs is not None:
                 for obj in objs:
-                    up_list.append((obj.name, i))
-        right_list = []
-        for i in range(1, vision_range):
-            objs = w.get_at(self.x + i, self.y)
-            if objs is not None:
-                for obj in objs:
-                    right_list.append((obj.name, i))
-        down_list = []
-        for i in range(1, vision_range):
-            objs = w.get_at(self.x, self.y - i)
-            if objs is not None:
-                for obj in objs:
-                    down_list.append((obj.name, i))
-        left_list = []
-        for i in range(1, vision_range):
-            objs = w.get_at(self. x - i, self.y)
-            if objs is not None:
-                for obj in objs:
-                    left_list.append((obj.name, i))
+                    seen.append((obj.name, i))
+
+        if not seen:
+            return None
+        return seen
+
+
+    def watch_environment(self, w):
+        up_list = self.watch_direction(w, "up")
+        down_list = self.watch_direction(w, "down")
+        left_list = self.watch_direction(w, "left")
+        right_list = self.watch_direction(w, "right")
         return {"up": up_list, "down": down_list, "left": left_list, "right": right_list}
 
     def move_random(self, w):
@@ -145,11 +151,11 @@ class World:
         return False
 
     def display(self):
-        matrix = [["." for x in range(self.size)] for y in range(self.size)]
+        matrix = [["." for y in range(self.size)] for x in range(self.size)]
         for objs in self.objects.values():
             for obj in objs:
-                if matrix[obj.x][obj.y] == ".":
-                    matrix[obj.x][obj.y] = obj.name
+                if matrix[obj.y][obj.x] == ".":
+                    matrix[obj.y][obj.x] = obj.name
         for row in matrix:
             print(' '.join(row))
 
@@ -171,7 +177,7 @@ if __name__ == '__main__':
     world.add_object(Agent(0, 1, "A"))
     world.add_object(Agent(0, 2, "B"))
     while True:
-        world.update()
         world.display()
+        world.update()
         time.sleep(1)
         print('\n')
