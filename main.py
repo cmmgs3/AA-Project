@@ -59,7 +59,7 @@ class Agent(Object):
         self.observacao(observacao)
         accao = self.age()
         result = ambiente.agir(accao, self)
-        self.avalicaoEstadoAtual()
+        self.avalicaoEstadoAtual(10)
 
 
 class Sensor:
@@ -198,7 +198,7 @@ class Simulador:
     def executa(self):
         self.ambiente.atualizacao()
         for agent in self.listaAgentes:
-            agent.executar()
+            agent.executar(self.ambiente)
 
 
 class SimulationGUI:
@@ -293,7 +293,7 @@ class SimulationGUI:
         for agent in self.simulador.listaAgentes:
             self.vision_text.insert(tk.END, f"Agente {agent.name}:\n", 'header')
 
-            obs = agent.ultima_observacao
+            obs = self.ambiente.observacaoPara(agent)
             if obs:
                 for direction, items in obs.items():
                     self.vision_text.insert(tk.END, f"  {direction}: ")
