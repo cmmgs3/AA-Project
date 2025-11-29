@@ -126,7 +126,7 @@ class Agent(Object):
             for key, value in self.ultima_observacao.items():
                 print(key + ": " + str(value))
 
-    def age(self) -> Move:
+    def age(self) -> Accao:
         directions = ["up", "down", "left", "right"]
         return Move(random.choice(directions))
 
@@ -184,7 +184,7 @@ class NeuralAgent(Agent):
                 input_vec[idx] = val
         return input_vec
 
-    def age(self) -> Move:
+    def age(self) -> Accao:
         if not self.ultima_observacao:
             d = random.choice(["up", "down", "left", "right"])
             self.last_action_name = d
@@ -269,7 +269,7 @@ class Ambiente:
     def atualizacao(self):
         pass
 
-    def agir(self, accao: Accao, agente):
+    def agir(self, accao: Accao, agente: Agent):
         if isinstance(accao, Accao) and isinstance(agente, Agent):
             return accao.act(agente, self)
         return False
