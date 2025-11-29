@@ -1,7 +1,8 @@
 import random
 import time
 import tkinter as tk
-
+import json
+import os
 
 class Object:
     def __init__(self, x, y, name):
@@ -102,9 +103,9 @@ class CircularSensor(Sensor):
             x, y = (agente.x + (modifier[0] * i), agente.y + (modifier[1] * i))
             obj = ambiente.objects.get((x, y))
             if isinstance(obj, Obstacle):
-                seen.append(obj.name)
+                seen.append((obj.name, i))
                 break
-            if obj is not None: seen.append(obj.name)
+            if obj is not None: seen.append((obj.name, i))
 
         if not seen:
             return None
@@ -150,23 +151,31 @@ class Agent(Object):
 class NeuralAgent(Agent):
     def __init__(self, x: int, y: int, name: str):
         super().__init__(x, y, name)
-        # Weights: 4 inputs (Up, Down, Left, Right) -> 4 outputs (Up, Down, Left, Right)
+        # Weights: 5 inputs (Up, Down, Left, Right, Bias) -> 4 outputs (Up, Down, Left, Right)
         self.weights = {
-            'up': [random.uniform(-0.1, 0.1) for _ in range(4)],
-            'down': [random.uniform(-0.1, 0.1) for _ in range(4)],
-            'left': [random.uniform(-0.1, 0.1) for _ in range(4)],
-            'right': [random.uniform(-0.1, 0.1) for _ in range(4)]
+            'up': [random.uniform(-0.1, 0.1) for _ in range(5)],
+            'down': [random.uniform(-0.1, 0.1) for _ in range(5)],
+            'left': [random.uniform(-0.1, 0.1) for _ in range(5)],
+            'right': [random.uniform(-0.1, 0.1) for _ in range(5)]
         }
         self.path = []
         self.last_action_name = None
         self.last_input = None
         self.learning_rate = 0.1
+        self.epsilon = 0.0 # Default to 0 for inference/evolution
+
+    def set_weights(self, weights):
+        self.weights = weights
+
+    def get_weights(self):
+        return self.weights
 
     def process_observation(self, obs):
-        # Input vector: [up_val, down_val, left_val, right_val]
-        # Val: 1 if Objective, -1 if Obstacle/Wall, 0 if Empty
+        # Input vector: [up_val, down_val, left_val, right_val, bias]
+        # Val: 1.0 if Objective, -1.0/dist if Obstacle/Wall, 0 if Empty
         mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
-        input_vec = [0.0] * 4
+        input_vec = [0.0] * 5
+        input_vec[4] = 1.0 # Bias
         
         if not obs:
             return input_vec
@@ -176,11 +185,12 @@ class NeuralAgent(Agent):
             if idx is not None:
                 val = 0.0
                 if items:
-                    closest = items[0]
-                    if closest == '*': # Objective
+                    # items is list of (name, dist)
+                    closest_name, closest_dist = items[0]
+                    if closest_name == '*': # Objective
                         val = 1.0
-                    elif closest == '□' or closest != '*': # Obstacle/Agent
-                        val = -1.0
+                    elif closest_name == '□' or closest_name != '*': # Obstacle/Agent
+                        val = -1.0 / closest_dist
                 input_vec[idx] = val
         return input_vec
 
@@ -188,7 +198,7 @@ class NeuralAgent(Agent):
         if not self.ultima_observacao:
             d = random.choice(["up", "down", "left", "right"])
             self.last_action_name = d
-            self.last_input = [0.0]*4
+            self.last_input = [0.0]*5
             return Move(d)
 
         inputs = self.process_observation(self.ultima_observacao)
@@ -200,25 +210,25 @@ class NeuralAgent(Agent):
         
         for action in actions:
             w = self.weights[action]
+            # Ensure weights match input size (handle old weights if any)
+            if len(w) != 5:
+                 w = w + [0.0] * (5 - len(w))
+            
             score = sum(i * w_i for i, w_i in zip(inputs, w))
             if score > best_score:
                 best_score = score
                 best_action = action
         
         # Epsilon-greedy
-        if random.random() < 0.1:
+        if random.random() < self.epsilon:
             best_action = random.choice(actions)
 
         self.last_action_name = best_action
         return Move(best_action)
 
     def avalicaoEstadoAtual(self, recompensa: int):
-        if self.last_action_name and self.last_input:
-            w = self.weights[self.last_action_name]
-            new_w = []
-            for i, val in enumerate(w):
-                new_w.append(val + self.learning_rate * recompensa * self.last_input[i])
-            self.weights[self.last_action_name] = new_w
+        # Online learning disabled for Evolutionary Algorithm
+        pass
 
     def executar(self, ambiente):
         observacao = ambiente.observacaoPara(self)
@@ -402,8 +412,9 @@ class SimulationGUI:
                 for direction, items in obs.items():
                     self.vision_text.insert(tk.END, f"  {direction}: ")
                     if items:
-                        # items é uma lista de strings, ex: ['□', 'A']
-                        self.vision_text.insert(tk.END, f"{', '.join(items)}\n")
+                        # items is list of (name, dist)
+                        display_items = [f"{name}({dist})" for name, dist in items]
+                        self.vision_text.insert(tk.END, f"{', '.join(display_items)}\n")
                     else:
                         self.vision_text.insert(tk.END, "-\n", 'dim')
             else:
@@ -451,5 +462,16 @@ if __name__ == "__main__":
     simulador = Simulador(la, amb)
 
     root = tk.Tk()
+    
+    # Try to load best weights if available
+    if os.path.exists("best_weights.json"):
+        try:
+            with open("best_weights.json", "r") as f:
+                weights = json.load(f)
+            agent1.set_weights(weights)
+            print("Loaded best weights!")
+        except Exception as e:
+            print(f"Could not load weights: {e}")
+
     gui = SimulationGUI(root, simulador)
     root.mainloop()
