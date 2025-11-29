@@ -460,7 +460,7 @@ class SimulationGUI:
 
 if __name__ == "__main__":
     la = []
-    agent1 = NeuralAgent(0, 4, "N")
+    agent1 = NeuralAgent(0, 0, "N")
     agent1.instala(CircularSensor(3))
     la.append(agent1)
 

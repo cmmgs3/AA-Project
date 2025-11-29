@@ -12,39 +12,71 @@ MUTATION_RATE = 0.1
 MUTATION_STRENGTH = 0.2
 ENV_SIZE = 10
 
-def create_environment():
+# Define multiple environment scenarios
+ENV_SCENARIOS = [
+    # Scenario 0: Original
+    {
+        "obstacles": [(2, 2), (3, 2), (4, 2)],
+        "objective": (5, 5),
+        "start_pos": (0, 0)
+    },
+    # Scenario 1: Wall
+    {
+        "obstacles": [(5, 0), (5, 1), (5, 2), (5, 3), (5, 4)],
+        "objective": (8, 2),
+        "start_pos": (2, 2)
+    },
+    # Scenario 2: Corner to Corner
+    {
+        "obstacles": [(3, 3), (4, 4), (5, 5), (6, 6)],
+        "objective": (9, 9),
+        "start_pos": (0, 0)
+    },
+    # Scenario 3: Trap (U-shape)
+    {
+        "obstacles": [(3, 3), (4, 3), (5, 3), (3, 4), (5, 4), (3, 5), (4, 5), (5, 5)],
+        "objective": (4, 4), # Inside the U
+        "start_pos": (0, 0)
+    },
+    # Scenario 4: Open Field
+    {
+        "obstacles": [],
+        "objective": (7, 7),
+        "start_pos": (1, 1)
+    }
+]
+
+def create_environment(scenario):
     amb = Ambiente(ENV_SIZE)
-    # Same setup as main.py for consistency
-    amb.add_object(Obstacle(2, 2))
-    amb.add_object(Obstacle(3, 2))
-    amb.add_object(Obstacle(4, 2))
-    amb.add_object(Objective(5, 5))
+    for obs_pos in scenario["obstacles"]:
+        amb.add_object(Obstacle(obs_pos[0], obs_pos[1]))
+    
+    obj_pos = scenario["objective"]
+    amb.add_object(Objective(obj_pos[0], obj_pos[1]))
     return amb
 
-def run_episode(weights):
-    agent = NeuralAgent(0, 0, "N")
+def run_episode(weights, scenario):
+    start_x, start_y = scenario["start_pos"]
+    agent = NeuralAgent(start_x, start_y, "N")
     agent.instala(CircularSensor(3))
     agent.set_weights(weights)
     
-    amb = create_environment()
+    amb = create_environment(scenario)
     sim = Simulador([agent], amb)
     
     total_reward = 0
     
-    # Objective position
-    obj_x, obj_y = 5, 5
+    obj_x, obj_y = scenario["objective"]
     
     for _ in range(SIMULATION_STEPS):
         sim.executa()
-        total_reward -= 1 # Step penalty (optimizes for shortest path)
+        total_reward -= 1 # Step penalty
         
         # Check adjacency to Objective
-        # Manhattan distance == 1 means adjacent (or 0 if on top, though main.py blocks that)
         dist = abs(agent.x - obj_x) + abs(agent.y - obj_y)
         
         if dist <= 1:
             total_reward += 100
-            # End simulation for this agent as requested
             break 
             
     return total_reward
@@ -78,7 +110,7 @@ def crossover(parent1, parent2):
     return child
 
 def main():
-    print(f"Starting Shortest Path Training (Sparse Reward, Stop on Adj): Pop={POPULATION_SIZE}, Gens={GENERATIONS}")
+    print(f"Starting Multi-Environment Training: Pop={POPULATION_SIZE}, Gens={GENERATIONS}, Scenarios={len(ENV_SCENARIOS)}")
     
     population = [create_random_weights() for _ in range(POPULATION_SIZE)]
     best_overall_weights = None
@@ -87,19 +119,24 @@ def main():
     for gen in range(GENERATIONS):
         scores = []
         for weights in population:
-            score = run_episode(weights)
-            scores.append((score, weights))
+            # Evaluate on ALL scenarios and average the score
+            total_scenario_score = 0
+            for scenario in ENV_SCENARIOS:
+                total_scenario_score += run_episode(weights, scenario)
+            
+            avg_score = total_scenario_score / len(ENV_SCENARIOS)
+            scores.append((avg_score, weights))
         
         scores.sort(key=lambda x: x[0], reverse=True)
         
         best_score = scores[0][0]
-        avg_score = sum(s[0] for s in scores) / len(scores)
+        avg_gen_score = sum(s[0] for s in scores) / len(scores)
         
         if best_score > best_overall_score:
             best_overall_score = best_score
             best_overall_weights = scores[0][1]
             
-        print(f"Gen {gen+1}: Best={best_score}, Avg={avg_score:.2f}")
+        print(f"Gen {gen+1}: Best={best_score:.2f}, Avg={avg_gen_score:.2f}")
         
         # Selection: Keep top 20%
         survivors = [s[1] for s in scores[:int(POPULATION_SIZE * 0.2)]]
