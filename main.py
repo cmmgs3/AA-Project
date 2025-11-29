@@ -25,88 +25,6 @@ class Obstacle(Object):
     def __str__(self):
         return f'Obstacle: {self.x} {self.y}'
 
-
-class Agent(Object):
-    def __init__(self, x, y, name):
-        self.sensor = None
-        self.ultima_observacao = None
-        super().__init__(x, y, name)
-
-    def observacao(self, obs):
-        self.ultima_observacao = obs
-
-    def printObservacao(self):
-        if self.ultima_observacao is not None:
-            print(self.name + " observacao")
-            for key, value in self.ultima_observacao.items():
-                print(key + ": " + str(value))
-
-    def age(self):
-        directions = ["up", "down", "left", "right"]
-        return Move(random.choice(directions))
-
-    def avalicaoEstadoAtual(self, recompensa):
-        pass
-
-    def instala(self, sensor):
-        self.sensor = sensor
-
-    def comunica(self, de_agente):
-        pass
-
-    def executar(self, ambiente):
-        observacao = ambiente.observacaoPara(self)
-        self.observacao(observacao)
-        accao = self.age()
-        result = ambiente.agir(accao, self)
-        self.avalicaoEstadoAtual(10)
-
-
-class Sensor:
-    def sense(self, agente, ambiente):
-        pass
-
-
-class CircularSensor(Sensor):
-    def __init__(self, vision_range):
-        if vision_range <= 0:
-            print("Vision range must be positive")
-            return
-        self.vision_range = vision_range
-
-    def sense(self, agente, ambiente):
-        up_list = self.watch_direction(agente, ambiente, "up")
-        down_list = self.watch_direction(agente, ambiente, "down")
-        left_list = self.watch_direction(agente, ambiente, "left")
-        right_list = self.watch_direction(agente, ambiente, "right")
-        return {"up": up_list, "down": down_list, "left": left_list, "right": right_list}
-
-    def watch_direction(self, agente, ambiente, direction):
-        seen = []
-
-        if direction == "up":
-            modifier = (0, -1)
-        elif direction == "down":
-            modifier = (0, 1)
-        elif direction == "right":
-            modifier = (1, 0)
-        elif direction == "left":
-            modifier = (-1, 0)
-        else:
-            return None
-
-        for i in range(1, self.vision_range + 1):
-            x, y = (agente.x + (modifier[0] * i), agente.y + (modifier[1] * i))
-            obj = ambiente.objects.get((x, y))
-            if obj is not None:
-                # TODO maybe distancia?
-                seen.append(obj.name)
-
-        if not seen:
-            return None
-        return seen
-
-
 class Accao:
     def act(self, agente, ambiente):
         pass
@@ -147,17 +65,202 @@ class Move(Accao):
         return True
 
 
+class Sensor:
+    def sense(self, agente, ambiente):
+        pass
+
+
+class CircularSensor(Sensor):
+    def __init__(self, vision_range):
+        if vision_range <= 0:
+            print("Vision range must be positive")
+            return
+        self.vision_range = vision_range
+
+    def sense(self, agente, ambiente):
+        up_list = self.watch_direction(agente, ambiente, "up")
+        down_list = self.watch_direction(agente, ambiente, "down")
+        left_list = self.watch_direction(agente, ambiente, "left")
+        right_list = self.watch_direction(agente, ambiente, "right")
+        return {"up": up_list, "down": down_list, "left": left_list, "right": right_list}
+
+    def watch_direction(self, agente, ambiente, direction):
+        seen = []
+
+        if direction == "up":
+            modifier = (0, -1)
+        elif direction == "down":
+            modifier = (0, 1)
+        elif direction == "right":
+            modifier = (1, 0)
+        elif direction == "left":
+            modifier = (-1, 0)
+        else:
+            return None
+
+        for i in range(1, self.vision_range + 1):
+            x, y = (agente.x + (modifier[0] * i), agente.y + (modifier[1] * i))
+            obj = ambiente.objects.get((x, y))
+            if isinstance(obj, Obstacle):
+                seen.append(obj.name)
+                break
+            if obj is not None: seen.append(obj.name)
+
+        if not seen:
+            return None
+        return seen
+
+
+class Agent(Object):
+    def __init__(self, x: int, y: int, name: str):
+        self.sensor = None
+        self.ultima_observacao = None
+        super().__init__(x, y, name)
+
+    def observacao(self, obs: dict):
+        self.ultima_observacao = obs
+
+    def printObservacao(self):
+        if self.ultima_observacao is not None:
+            print(self.name + " observacao")
+            for key, value in self.ultima_observacao.items():
+                print(key + ": " + str(value))
+
+    def age(self) -> Move:
+        directions = ["up", "down", "left", "right"]
+        return Move(random.choice(directions))
+
+    def avalicaoEstadoAtual(self, recompensa: int):
+        pass
+
+    def instala(self, sensor: Sensor):
+        self.sensor = sensor
+
+    def comunica(self, de_agente):
+        pass
+
+    def executar(self, ambiente):
+        observacao = ambiente.observacaoPara(self)
+        self.observacao(observacao)
+        accao = self.age()
+        result = ambiente.agir(accao, self)
+        recompensa = 0 # Default reward
+        self.avalicaoEstadoAtual(recompensa)
+
+class NeuralAgent(Agent):
+    def __init__(self, x: int, y: int, name: str):
+        super().__init__(x, y, name)
+        # Weights: 4 inputs (Up, Down, Left, Right) -> 4 outputs (Up, Down, Left, Right)
+        self.weights = {
+            'up': [random.uniform(-0.1, 0.1) for _ in range(4)],
+            'down': [random.uniform(-0.1, 0.1) for _ in range(4)],
+            'left': [random.uniform(-0.1, 0.1) for _ in range(4)],
+            'right': [random.uniform(-0.1, 0.1) for _ in range(4)]
+        }
+        self.path = []
+        self.last_action_name = None
+        self.last_input = None
+        self.learning_rate = 0.1
+
+    def process_observation(self, obs):
+        # Input vector: [up_val, down_val, left_val, right_val]
+        # Val: 1 if Objective, -1 if Obstacle/Wall, 0 if Empty
+        mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
+        input_vec = [0.0] * 4
+        
+        if not obs:
+            return input_vec
+
+        for direction, items in obs.items():
+            idx = mapping.get(direction)
+            if idx is not None:
+                val = 0.0
+                if items:
+                    closest = items[0]
+                    if closest == '*': # Objective
+                        val = 1.0
+                    elif closest == '□' or closest != '*': # Obstacle/Agent
+                        val = -1.0
+                input_vec[idx] = val
+        return input_vec
+
+    def age(self) -> Move:
+        if not self.ultima_observacao:
+            d = random.choice(["up", "down", "left", "right"])
+            self.last_action_name = d
+            self.last_input = [0.0]*4
+            return Move(d)
+
+        inputs = self.process_observation(self.ultima_observacao)
+        self.last_input = inputs
+        
+        actions = ['up', 'down', 'left', 'right']
+        best_score = -float('inf')
+        best_action = random.choice(actions)
+        
+        for action in actions:
+            w = self.weights[action]
+            score = sum(i * w_i for i, w_i in zip(inputs, w))
+            if score > best_score:
+                best_score = score
+                best_action = action
+        
+        # Epsilon-greedy
+        if random.random() < 0.1:
+            best_action = random.choice(actions)
+
+        self.last_action_name = best_action
+        return Move(best_action)
+
+    def avalicaoEstadoAtual(self, recompensa: int):
+        if self.last_action_name and self.last_input:
+            w = self.weights[self.last_action_name]
+            new_w = []
+            for i, val in enumerate(w):
+                new_w.append(val + self.learning_rate * recompensa * self.last_input[i])
+            self.weights[self.last_action_name] = new_w
+
+    def executar(self, ambiente):
+        observacao = ambiente.observacaoPara(self)
+        self.observacao(observacao)
+        accao = self.age()
+        
+        target_x = self.x + accao.modifier[0]
+        target_y = self.y + accao.modifier[1]
+        
+        if target_x < 0 or target_x >= ambiente.size or target_y < 0 or target_y >= ambiente.size:
+             reward = -10
+             result = False
+        else:
+            target_obj = ambiente.objects.get((target_x, target_y))
+            if isinstance(target_obj, Objective):
+                reward = 100
+                print(f"{self.name} reached Objective!")
+                result = False
+            elif target_obj is not None:
+                reward = -10
+                result = False
+            else:
+                reward = -1
+                result = ambiente.agir(accao, self)
+        
+        if result:
+            self.path.append((self.x, self.y))
+            
+        self.avalicaoEstadoAtual(reward)
+
+
 class Ambiente:
-    def __init__(self, size):
+    def __init__(self, size: int):
         self.objects = {}
         self.size = size
 
-    def add_object(self, obj):
+    def add_object(self, obj: Object):
         target_pos = (obj.x, obj.y)
         if self.objects.get(target_pos) is None:
             self.objects[target_pos] = obj
 
-    def observacaoPara(self, agente):
+    def observacaoPara(self, agente: Agent) -> dict | None:
         if isinstance(agente, Agent):
             if agente.sensor is not None:
                 return agente.sensor.sense(agente, self)
@@ -166,9 +269,10 @@ class Ambiente:
     def atualizacao(self):
         pass
 
-    def agir(self, accao, agente):
+    def agir(self, accao: Accao, agente):
         if isinstance(accao, Accao) and isinstance(agente, Agent):
             return accao.act(agente, self)
+        return False
 
     # Não se usa toList() porque o GUI tem acesso direto ao mapa
     def toList(self):
@@ -184,10 +288,10 @@ class Ambiente:
 
 
 class Simulador:
-    def __init__(self, listaAgente, ambiente):
+    def __init__(self, listaAgente: list, ambiente: Ambiente):
         self.listaAgentes = listaAgente
         self.ambiente = ambiente
-        for agent in la:
+        for agent in self.listaAgentes:
             self.ambiente.add_object(agent)
 
     def listarAgentes(self):
@@ -331,20 +435,21 @@ class SimulationGUI:
 
 if __name__ == "__main__":
     la = []
-    agent1 = Agent(0, 1, "A")
-    agent1.instala(CircularSensor(2))
-    agent2 = Agent(0, 2, "B")
-    agent2.instala(CircularSensor(1))
+    agent1 = NeuralAgent(0, 0, "N")
+    agent1.instala(CircularSensor(3))
     la.append(agent1)
+    agent2 = Agent(0, 1, "D")
+    agent2.instala(CircularSensor(3))
     la.append(agent2)
-    amb = Ambiente(9)
-    amb.add_object(Obstacle(0, 3))
-    amb.add_object(Obstacle(1, 3))
-    amb.add_object(Obstacle(2, 3))
-    amb.add_object(Obstacle(3, 3))
+
+    amb = Ambiente(10)
+    amb.add_object(Obstacle(2, 2))
+    amb.add_object(Obstacle(3, 2))
+    amb.add_object(Obstacle(4, 2))
+    amb.add_object(Objective(5, 5))
+    
     simulador = Simulador(la, amb)
 
     root = tk.Tk()
     gui = SimulationGUI(root, simulador)
     root.mainloop()
-    # simulador.executa()
