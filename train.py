@@ -1,12 +1,12 @@
 import random
 import json
 import copy
-import time
+import math
 from main import NeuralAgent, CircularSensor, Ambiente, Obstacle, Objective, Simulador
 
 # Configuration
 POPULATION_SIZE = 50
-GENERATIONS = 50
+GENERATIONS = 100
 SIMULATION_STEPS = 50
 MUTATION_RATE = 0.1
 MUTATION_STRENGTH = 0.2
@@ -30,52 +30,32 @@ def run_episode(weights):
     sim = Simulador([agent], amb)
     
     total_reward = 0
-    reached_objective = False
+    
+    # Objective position
+    obj_x, obj_y = 5, 5
     
     for _ in range(SIMULATION_STEPS):
-        # We need to capture the reward. 
-        # Since main.py's execute doesn't return reward directly, we can infer it or modify main.py more.
-        # However, we can check the agent's position relative to objective.
-        
-        # Let's do a custom execution step here to track reward better without changing main.py too much
-        # Actually, main.py prints "reached Objective!".
-        # Let's check if agent is at objective.
-        
-        # To avoid modifying main.py too much, we will just run the step and check state.
-        
-        # Pre-check distance
-        dist_before = abs(agent.x - 5) + abs(agent.y - 5)
-        
         sim.executa()
+        total_reward -= 1 # Step penalty (optimizes for shortest path)
         
-        # Post-check
-        dist_after = abs(agent.x - 5) + abs(agent.y - 5)
+        # Check adjacency to Objective
+        # Manhattan distance == 1 means adjacent (or 0 if on top, though main.py blocks that)
+        dist = abs(agent.x - obj_x) + abs(agent.y - obj_y)
         
-        # Check if reached objective
-        obj = amb.objects.get((agent.x, agent.y))
-        if isinstance(obj, Objective):
+        if dist <= 1:
             total_reward += 100
-            reached_objective = True
-            break # Stop if reached
+            # End simulation for this agent as requested
+            break 
             
-        # Check if hit obstacle (agent position reverted or not moved if hit wall/obstacle)
-        # But main.py logic: if hit obstacle, move fails. 
-        
-        # Let's just use distance heuristic + step penalty
-        total_reward -= 1 # Step penalty
-        
-        # Reward for getting closer
-        if dist_after < dist_before:
-            total_reward += 2
-        
     return total_reward
 
 def create_random_weights():
+    # 9 inputs: Up, Down, Left, Right, Bias, LastUp, LastDown, LastLeft, LastRight
     return {
-        'up': [random.uniform(-1, 1) for _ in range(5)],
-        'down': [random.uniform(-1, 1) for _ in range(5)],
-        'left': [random.uniform(-1, 1) for _ in range(5)],
-        'right': [random.uniform(-1, 1) for _ in range(5)]
+        'up': [random.uniform(-1, 1) for _ in range(9)],
+        'down': [random.uniform(-1, 1) for _ in range(9)],
+        'left': [random.uniform(-1, 1) for _ in range(9)],
+        'right': [random.uniform(-1, 1) for _ in range(9)]
     }
 
 def mutate(weights):
@@ -98,7 +78,7 @@ def crossover(parent1, parent2):
     return child
 
 def main():
-    print(f"Starting Evolutionary Training: Pop={POPULATION_SIZE}, Gens={GENERATIONS}")
+    print(f"Starting Shortest Path Training (Sparse Reward, Stop on Adj): Pop={POPULATION_SIZE}, Gens={GENERATIONS}")
     
     population = [create_random_weights() for _ in range(POPULATION_SIZE)]
     best_overall_weights = None
@@ -138,9 +118,10 @@ def main():
         
     print(f"Training Complete. Best Score: {best_overall_score}")
     
-    with open("best_weights.json", "w") as f:
-        json.dump(best_overall_weights, f)
-    print("Saved best weights to best_weights.json")
+    if best_overall_weights:
+        with open("best_weights.json", "w") as f:
+            json.dump(best_overall_weights, f)
+        print("Saved best weights to best_weights.json")
 
 if __name__ == "__main__":
     main()

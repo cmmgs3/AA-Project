@@ -1,5 +1,4 @@
 import random
-import time
 import tkinter as tk
 import json
 import os
@@ -10,14 +9,21 @@ class Object:
         self.y = y
         self.name = name
 
-
 class Objective(Object):
     def __init__(self, x, y):
         super().__init__(x, y, '*')
 
+    def checkWin(self, ambiente) -> bool:
+        up = ambiente.objects.get((self.x, self.y-1))
+        down = ambiente.objects.get((self.x, self.y+1))
+        left = ambiente.objects.get((self.x-1, self.y))
+        right = ambiente.objects.get((self.x+1, self.y))
+        if isinstance(up, Agent) or isinstance(down, Agent) or isinstance(left, Agent) or isinstance(right, Agent):
+            return True
+        return False
+
     def __str__(self):
         return f'Objective: {self.x} {self.y}'
-
 
 class Obstacle(Object):
     def __init__(self, x, y):
@@ -29,7 +35,6 @@ class Obstacle(Object):
 class Accao:
     def act(self, agente, ambiente):
         pass
-
 
 class Move(Accao):
     def __init__(self, direction):
@@ -48,7 +53,6 @@ class Move(Accao):
             return
 
     def act(self, agente, ambiente):
-
         current_location = (agente.x, agente.y)
         target_location = (agente.x + self.modifier[0], agente.y + self.modifier[1])
 
@@ -65,11 +69,9 @@ class Move(Accao):
         ambiente.objects.update({target_location: agente})
         return True
 
-
 class Sensor:
     def sense(self, agente, ambiente):
         pass
-
 
 class CircularSensor(Sensor):
     def __init__(self, vision_range):
@@ -87,7 +89,6 @@ class CircularSensor(Sensor):
 
     def watch_direction(self, agente, ambiente, direction):
         seen = []
-
         if direction == "up":
             modifier = (0, -1)
         elif direction == "down":
@@ -110,7 +111,6 @@ class CircularSensor(Sensor):
         if not seen:
             return None
         return seen
-
 
 class Agent(Object):
     def __init__(self, x: int, y: int, name: str):
@@ -151,12 +151,12 @@ class Agent(Object):
 class NeuralAgent(Agent):
     def __init__(self, x: int, y: int, name: str):
         super().__init__(x, y, name)
-        # Weights: 5 inputs (Up, Down, Left, Right, Bias) -> 4 outputs (Up, Down, Left, Right)
+        # Weights: 9 inputs (Up, Down, Left, Right, Bias, LastUp, LastDown, LastLeft, LastRight)
         self.weights = {
-            'up': [random.uniform(-0.1, 0.1) for _ in range(5)],
-            'down': [random.uniform(-0.1, 0.1) for _ in range(5)],
-            'left': [random.uniform(-0.1, 0.1) for _ in range(5)],
-            'right': [random.uniform(-0.1, 0.1) for _ in range(5)]
+            'up': [random.uniform(-0.1, 0.1) for _ in range(9)],
+            'down': [random.uniform(-0.1, 0.1) for _ in range(9)],
+            'left': [random.uniform(-0.1, 0.1) for _ in range(9)],
+            'right': [random.uniform(-0.1, 0.1) for _ in range(9)]
         }
         self.path = []
         self.last_action_name = None
@@ -171,34 +171,39 @@ class NeuralAgent(Agent):
         return self.weights
 
     def process_observation(self, obs):
-        # Input vector: [up_val, down_val, left_val, right_val, bias]
-        # Val: 1.0 if Objective, -1.0/dist if Obstacle/Wall, 0 if Empty
+        # Input vector: [up, down, left, right, bias, last_up, last_down, last_left, last_right]
         mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
-        input_vec = [0.0] * 5
+        input_vec = [0.0] * 9
         input_vec[4] = 1.0 # Bias
         
-        if not obs:
-            return input_vec
-
-        for direction, items in obs.items():
-            idx = mapping.get(direction)
-            if idx is not None:
-                val = 0.0
-                if items:
-                    # items is list of (name, dist)
-                    closest_name, closest_dist = items[0]
-                    if closest_name == '*': # Objective
-                        val = 1.0
-                    elif closest_name == '□' or closest_name != '*': # Obstacle/Agent
-                        val = -1.0 / closest_dist
-                input_vec[idx] = val
+        # Sensor inputs
+        if obs:
+            for direction, items in obs.items():
+                idx = mapping.get(direction)
+                if idx is not None:
+                    val = 0.0
+                    if items:
+                        # items is list of (name, dist)
+                        closest_name, closest_dist = items[0]
+                        if closest_name == '*': # Objective
+                            val = 1.0 / closest_dist # Scale by distance!
+                        elif closest_name == '□' or closest_name != '*': # Obstacle/Agent
+                            val = -1.0 / closest_dist
+                    input_vec[idx] = val
+        
+        # Last action inputs
+        if self.last_action_name:
+            last_idx = mapping.get(self.last_action_name)
+            if last_idx is not None:
+                input_vec[5 + last_idx] = 1.0
+                
         return input_vec
 
     def age(self) -> Accao:
         if not self.ultima_observacao:
             d = random.choice(["up", "down", "left", "right"])
             self.last_action_name = d
-            self.last_input = [0.0]*5
+            self.last_input = [0.0]*9
             return Move(d)
 
         inputs = self.process_observation(self.ultima_observacao)
@@ -211,8 +216,8 @@ class NeuralAgent(Agent):
         for action in actions:
             w = self.weights[action]
             # Ensure weights match input size (handle old weights if any)
-            if len(w) != 5:
-                 w = w + [0.0] * (5 - len(w))
+            if len(w) != 9:
+                 w = w + [0.0] * (9 - len(w))
             
             score = sum(i * w_i for i, w_i in zip(inputs, w))
             if score > best_score:
@@ -259,7 +264,6 @@ class NeuralAgent(Agent):
             
         self.avalicaoEstadoAtual(reward)
 
-
 class Ambiente:
     def __init__(self, size: int):
         self.objects = {}
@@ -296,7 +300,6 @@ class Ambiente:
         for row in self.toList():
             print(' '.join(row))
 
-
 class Simulador:
     def __init__(self, listaAgente: list, ambiente: Ambiente):
         self.listaAgentes = listaAgente
@@ -308,12 +311,20 @@ class Simulador:
         for agent in self.listaAgentes:
             print(agent)
 
-    # O mesmo que no main.py
     def executa(self):
+        objectives = []
+        for obj in self.ambiente.objects.values():
+            if isinstance(obj, Objective):
+                objectives.append(obj)
         self.ambiente.atualizacao()
         for agent in self.listaAgentes:
             agent.executar(self.ambiente)
-
+        
+        win = False
+        for obj in objectives:
+            if obj.checkWin(self.ambiente):
+                win = True
+        return win
 
 class SimulationGUI:
     def __init__(self, master, simulador):
@@ -427,9 +438,13 @@ class SimulationGUI:
 
     def run_step(self):
         if self.running:
-            self.simulador.executa()
+            win = self.simulador.executa()
             self.update_gui()
-            self.master.after(1000, self.run_step)  # Loop
+            if win:
+                print("Simulation Won!")
+                self.stop_simulation()
+            else:
+                self.master.after(1000, self.run_step) 
 
     def start_simulation(self):
         if not self.running:
@@ -443,15 +458,11 @@ class SimulationGUI:
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
 
-
 if __name__ == "__main__":
     la = []
-    agent1 = NeuralAgent(0, 0, "N")
+    agent1 = NeuralAgent(0, 4, "N")
     agent1.instala(CircularSensor(3))
     la.append(agent1)
-    agent2 = Agent(0, 1, "D")
-    agent2.instala(CircularSensor(3))
-    la.append(agent2)
 
     amb = Ambiente(10)
     amb.add_object(Obstacle(2, 2))
