@@ -32,6 +32,13 @@ class Obstacle(Object):
     def __str__(self):
         return f'Obstacle: {self.x} {self.y}'
 
+class Farol(Objective):
+    def __init__(self, x, y):
+        super().__init__(x, y)
+
+    def __str__(self):
+        return f'Farol: {self.x} {self.y}'
+
 class Accao:
     def act(self, agente, ambiente):
         pass
@@ -111,6 +118,12 @@ class CircularSensor(Sensor):
         if not seen:
             return None
         return seen
+
+class FarolSensor(Sensor):
+    def __init__(self, farol: Farol):
+        self.farol = farol
+    def sense(self, agente, ambiente):
+        return {"farol_delta": (abs(agente.x - self.farol.x), abs(agente.y - self.farol.y))}
 
 class Agent(Object):
     def __init__(self, x: int, y: int, name: str):
