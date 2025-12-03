@@ -4,27 +4,30 @@ import tkinter as tk
 import json
 import os
 
+
 class Object:
     def __init__(self, x, y, name):
         self.x = x
         self.y = y
         self.name = name
 
+
 class Objective(Object):
     def __init__(self, x, y):
         super().__init__(x, y, '*')
 
     def checkWin(self, ambiente) -> bool:
-        up = ambiente.objects.get((self.x, self.y-1))
-        down = ambiente.objects.get((self.x, self.y+1))
-        left = ambiente.objects.get((self.x-1, self.y))
-        right = ambiente.objects.get((self.x+1, self.y))
+        up = ambiente.objects.get((self.x, self.y - 1))
+        down = ambiente.objects.get((self.x, self.y + 1))
+        left = ambiente.objects.get((self.x - 1, self.y))
+        right = ambiente.objects.get((self.x + 1, self.y))
         if isinstance(up, Agent) or isinstance(down, Agent) or isinstance(left, Agent) or isinstance(right, Agent):
             return True
         return False
 
     def __str__(self):
         return f'Objective: {self.x} {self.y}'
+
 
 class Obstacle(Object):
     def __init__(self, x, y):
@@ -33,6 +36,7 @@ class Obstacle(Object):
     def __str__(self):
         return f'Obstacle: {self.x} {self.y}'
 
+
 class Farol(Objective):
     def __init__(self, x, y):
         super().__init__(x, y)
@@ -40,9 +44,11 @@ class Farol(Objective):
     def __str__(self):
         return f'Farol: {self.x} {self.y}'
 
+
 class Accao:
     def act(self, agente, ambiente):
         pass
+
 
 class Move(Accao):
     def __init__(self, direction):
@@ -77,9 +83,11 @@ class Move(Accao):
         ambiente.objects.update({target_location: agente})
         return True
 
+
 class Sensor:
     def sense(self, agente, ambiente):
         pass
+
 
 class CircularSensor(Sensor):
     def __init__(self, vision_range):
@@ -120,11 +128,14 @@ class CircularSensor(Sensor):
             return None
         return seen
 
+
 class FarolSensor(Sensor):
     def __init__(self, farol: Farol):
         self.farol = farol
+
     def sense(self, agente, ambiente):
         return {"farol_delta": (abs(agente.x - self.farol.x), abs(agente.y - self.farol.y))}
+
 
 class Agent(Object):
     def __init__(self, x: int, y: int, name: str):
@@ -159,9 +170,8 @@ class Agent(Object):
         self.observacao(observacao)
         accao = self.age()
         result = ambiente.agir(accao, self)
-        recompensa = 0 # Default reward
+        recompensa = 0  # Default reward
         self.avalicaoEstadoAtual(recompensa)
-
 
 class NeuralAgent(Agent):
     def __init__(self, x: int, y: int, name: str):
@@ -170,9 +180,7 @@ class NeuralAgent(Agent):
         self.path = []
         self.visit_counts = {}
 
-        # VOLTAMOS AO BÁSICO: 11 Inputs.
-        # A rede só precisa de saber onde estão as paredes e o objetivo.
-        # Não a vamos confundir com contagens de passos.
+        # 11 Inputs como ya tenías
         self.input_size = 11
         self.actions = ['up', 'down', 'left', 'right']
 
@@ -185,7 +193,7 @@ class NeuralAgent(Agent):
 
         self.learning_rate = 0.1
         self.discount_factor = 0.9
-        self.epsilon = 0.0 #todo 0 para os casos reais e 0.1 para testes
+        self.epsilon = 0.0
 
         self.last_state_inputs = None
         self.last_action = None
@@ -193,6 +201,10 @@ class NeuralAgent(Agent):
         self.target_coords = None
 
         self.visit_counts[(x, y)] = 1
+
+        # 🧠 NUEVO: Memoria corta anti-bucles
+        self.recent_positions = []
+        self.max_memory = 50
 
     def set_weights(self, weights):
         test_key = list(weights.keys())[0]
@@ -202,15 +214,12 @@ class NeuralAgent(Agent):
 
     def get_q_value(self, inputs, action):
         w = self.weights[action]
-        limit = min(len(inputs), len(w))
-        return sum(inputs[i] * w[i] for i in range(limit))
+        return sum(inputs[i] * w[i] for i in range(min(len(inputs), len(w))))
 
     def get_inputs(self, obs, ambiente):
-        # Voltamos à versão "limpa" dos inputs
         inputs = [0.0] * self.input_size
         mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
 
-        # 1. Visão
         if obs:
             for direction, items in obs.items():
                 idx = mapping.get(direction)
@@ -219,169 +228,121 @@ class NeuralAgent(Agent):
                     val = 1.0 / max(dist, 0.1)
                     if obj_name == '*':
                         inputs[idx] = val * 2.0
-                    elif isinstance(obj_name, str) and ('Obstacle' in obj_name or obj_name == '□'):
+                    elif obj_name == '□':
                         inputs[idx] = -val
 
-        # 2. GPS
         if self.target_coords:
             tx, ty = self.target_coords
             dx = tx - self.x
             dy = ty - self.y
-            dist = math.sqrt(dx * dx + dy * dy) if (dx != 0 or dy != 0) else 1.0
+            dist = math.sqrt(dx*dx + dy*dy) if dx or dy else 1.0
             inputs[4] = dx / dist
             inputs[5] = dy / dist
 
-        # 3. Bias e Memória
         inputs[6] = 1.0
-        if self.last_action_idx is not None and self.last_action_idx < 4:
+        if self.last_action_idx < 4:
             inputs[7 + self.last_action_idx] = 1.0
 
         return inputs
 
     def is_safe_move(self, action, ambiente):
-        mod = (0, 0)
-        if action == "up":
-            mod = (0, -1)
-        elif action == "down":
-            mod = (0, 1)
-        elif action == "left":
-            mod = (-1, 0)
-        elif action == "right":
-            mod = (1, 0)
-
-        tx = self.x + mod[0]
-        ty = self.y + mod[1]
-
+        mod = {'up': (0, -1),'down': (0, 1),'left': (-1, 0),'right': (1, 0)}[action]
+        tx, ty = self.x + mod[0], self.y + mod[1]
         if not (0 <= tx < ambiente.size and 0 <= ty < ambiente.size): return False
         obj = ambiente.objects.get((tx, ty))
-        if isinstance(obj, Obstacle): return False
-        return True
+        return not isinstance(obj, Obstacle)
 
     def age(self, ambiente) -> Accao:
-        # A MÁGICA ACONTECE AQUI AGORA
-
         if self.last_state_inputs is None:
-            safe_actions = [a for a in self.actions if self.is_safe_move(a, ambiente)]
-            if not safe_actions: safe_actions = self.actions
-            accao = random.choice(safe_actions)
+            safe = [a for a in self.actions if self.is_safe_move(a, ambiente)]
+            if not safe: safe = self.actions
+            accao = random.choice(safe)
             self.last_action = accao
-            mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
-            self.last_action_idx = mapping[accao]
+            self.last_action_idx = self.actions.index(accao)
             return Move(accao)
 
         scores = {}
         for action in self.actions:
-            # 1. O que a rede acha (Baseado em paredes e objetivo)
             q_val = self.get_q_value(self.last_state_inputs, action)
 
-            # 2. Segurança Hardcoded (Paredes)
             if not self.is_safe_move(action, ambiente):
                 q_val = -float('inf')
             else:
-                # 3. Penalidade de Tédio Hardcoded (O Segredo)
-                # Calculamos onde essa ação vai dar
-                mod = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}[action]
+                mod = {'up': (0, -1),'down': (0, 1),'left': (-1, 0),'right': (1, 0)}[action]
                 target_pos = (self.x + mod[0], self.y + mod[1])
 
-                # Vamos buscar quantas vezes já lá fomos
                 visits = self.visit_counts.get(target_pos, 0)
+                q_val -= visits * 50.5
 
-                # SUBTRAÍMOS do score final.
-                # A rede neural diz "Vai!", mas nós dizemos "Espera, já fui aí 10 vezes".
-                # O valor 0.5 é ajustável. Se ele ainda andar muito em círculos, aumenta para 1.0 ou 2.0.
-                q_val -= (visits * 50.5)
+                # 🚫 NUEVO: Anti-bucle inmediato
+                if target_pos in self.recent_positions:
+                    q_val -= 200.0
 
             scores[action] = q_val
 
-        # Epsilon-Greedy
         if random.random() < self.epsilon:
-            safe_actions = [a for a in self.actions if scores[a] > -float('inf')]
-            best_action = random.choice(safe_actions) if safe_actions else random.choice(self.actions)
+            best_action = random.choice([a for a in self.actions if scores[a] > -float('inf')])
         else:
             best_action = max(scores, key=scores.get)
 
         self.last_action = best_action
-        mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
-        self.last_action_idx = mapping[best_action]
-
+        self.last_action_idx = self.actions.index(best_action)
         return Move(best_action)
 
     def learn(self, reward, new_inputs):
         if self.last_state_inputs is None or self.last_action is None: return
 
         current_q = self.get_q_value(self.last_state_inputs, self.last_action)
-        max_next_q = -float('inf')
-        for action in self.actions:
-            q = self.get_q_value(new_inputs, action)
-            if q > max_next_q: max_next_q = q
-
-        target = reward + (self.discount_factor * max_next_q)
+        max_next_q = max(self.get_q_value(new_inputs, a) for a in self.actions)
+        target = reward + self.discount_factor * max_next_q
         error = target - current_q
 
-        w = self.weights[self.last_action]
-        new_w = []
-        for i in range(len(w)):
+        for i in range(len(self.weights[self.last_action])):
             if i < len(self.last_state_inputs):
-                delta = self.learning_rate * error * self.last_state_inputs[i]
-                new_w.append(w[i] + delta)
-            else:
-                new_w.append(w[i])
-        self.weights[self.last_action] = new_w
+                self.weights[self.last_action][i] += self.learning_rate * error * self.last_state_inputs[i]
 
     def executar(self, ambiente):
-        # 1. GPS
-        found = False
         for pos, obj in ambiente.objects.items():
             if isinstance(obj, Objective):
                 self.target_coords = pos
-                found = True
                 break
-        if not found: self.target_coords = None
 
-        # 2. Perceção
-        observacao_bruta = ambiente.observacaoPara(self)
-        self.observacao(observacao_bruta)
-        current_inputs = self.get_inputs(observacao_bruta, ambiente)
+        obs = ambiente.observacaoPara(self)
+        self.observacao(obs)
+        current_inputs = self.get_inputs(obs, ambiente)
         self.last_state_inputs = current_inputs
 
-        # 3. Decisão (AGORA INCLUI A PENALIDADE DE TÉDIO INTERNAMENTE)
         accao = self.age(ambiente)
 
-        # 4. Cálculo da Recompensa
         target_x = self.x + accao.modifier[0]
         target_y = self.y + accao.modifier[1]
-
+        reward = -0.5
         valid_move = True
-        if not (0 <= target_x < ambiente.size and 0 <= target_y < ambiente.size):
-            reward = -20.0
-            valid_move = False
-        else:
-            obj = ambiente.objects.get((target_x, target_y))
-            if isinstance(obj, Objective):
-                reward = 50.0
-            elif isinstance(obj, Obstacle):
-                reward = -20.0
-                valid_move = False
-            else:
-                # Recompensa base pequena para incentivar movimento
-                reward = -0.5
-                # Nota: Já não precisamos de punir TANTO aqui,
-                # porque a função age() já evita a repetição.
-                # Mas uma punição leve ajuda a manter o caminho curto.
-                visits = self.visit_counts.get((target_x, target_y), 0)
-                if visits > 0:
-                    reward -= 1.0
 
-                    # 5. Executar movimento
+        obj = ambiente.objects.get((target_x, target_y))
+        if obj is None:
+            pass
+        elif isinstance(obj, Objective):
+            reward += 50.0
+            print(f"{self.name} reached the goal! Resetting memory!")
+            self.recent_positions.clear()
+        elif isinstance(obj, Obstacle):
+            reward -= 20.0
+            valid_move = False
+
         if ambiente.agir(accao, self):
             self.path.append((self.x, self.y))
-            count = self.visit_counts.get((self.x, self.y), 0)
-            self.visit_counts[(self.x, self.y)] = count + 1
+            self.visit_counts[(self.x, self.y)] = self.visit_counts.get((self.x, self.y), 0) + 1
 
-        # 6. Aprender
+            # 🧠 NUEVO: memoria corta anti-loops
+            self.recent_positions.append((self.x, self.y))
+            if len(self.recent_positions) > self.max_memory:
+                self.recent_positions.pop(0)
+
         new_obs = ambiente.observacaoPara(self)
         new_inputs = self.get_inputs(new_obs, ambiente)
         self.learn(reward, new_inputs)
+
 
 class Ambiente:
     def __init__(self, size: int):
@@ -419,6 +380,7 @@ class Ambiente:
         for row in self.toList():
             print(' '.join(row))
 
+
 class Simulador:
     def __init__(self, listaAgente: list, ambiente: Ambiente):
         self.listaAgentes = listaAgente
@@ -438,12 +400,13 @@ class Simulador:
         self.ambiente.atualizacao()
         for agent in self.listaAgentes:
             agent.executar(self.ambiente)
-        
+
         win = False
         for obj in objectives:
             if obj.checkWin(self.ambiente):
                 win = True
         return win
+
 
 class SimulationGUI:
     def __init__(self, master, simulador):
@@ -577,6 +540,7 @@ class SimulationGUI:
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
 
+
 if __name__ == "__main__":
     la = []
 
@@ -589,7 +553,7 @@ if __name__ == "__main__":
                 (6, 2), (7, 2), (8, 2),
                 (6, 4), (6, 5),
                 (7, 8), (6, 8), (5, 8), (4, 8), (3, 8),
-                (8, 7), (2, 7), (9,7)
+                (8, 7), (2, 7), (9, 7)
             ],
             "objective": (8, 8),
             "start_pos": (0, 0)
@@ -601,7 +565,7 @@ if __name__ == "__main__":
                 (6, 2), (7, 2), (8, 2),
                 (6, 4), (6, 5),
                 (7, 8), (6, 8), (5, 8), (4, 8), (3, 8),
-                (8, 7), (2, 7), (7,9)
+                (8, 7), (2, 7), (7, 9)
             ],
             "objective": (8, 8),
             "start_pos": (0, 0)
@@ -626,8 +590,38 @@ if __name__ == "__main__":
             ],
             "objective": (8, 7),
             "start_pos": (1, 2)
+        },
+
+        {
+            "obstacles": [
+                (1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1),
+                (1, 2), (8, 2),
+                (1, 3), (3, 3), (4, 3), (5, 3), (8, 3),
+                (1, 4), (5, 4), (8, 4),
+                (1, 5), (3, 5), (4, 5), (5, 5), (8, 5),
+                (1, 6), (8, 6),
+                (1, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7), (8, 7),
+                (1, 8), (8, 8),(9,1)
+            ],
+            "objective": (9, 0),
+            "start_pos": (0, 9)
+        },
+
+        {
+            "obstacles": [
+                (2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (7, 2),
+                (2, 3), (7, 3),
+                (2, 4), (4, 4), (5, 4), (7, 4),
+                (2, 5), (4, 5), (5, 5), (7, 5),
+                (2, 6), (7, 6),
+                (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7)
+            ],
+            "objective": (9, 5),
+            "start_pos": (0, 4)
         }
+
     ]
+
 
     def create_environment(scenario):
         amb = Ambiente(10)
@@ -643,14 +637,13 @@ if __name__ == "__main__":
         la.append(agent)
         return amb
 
-    amb = create_environment(ENV_SCENARIOS[2])
 
-
+    amb = create_environment(ENV_SCENARIOS[4])
 
     simulador = Simulador(la, amb)
 
     root = tk.Tk()
-    
+
     # Try to load best weights if available
     if os.path.exists("best_weights.json"):
         try:

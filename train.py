@@ -24,18 +24,19 @@ ENV_SCENARIOS = [
      "start_pos": (0, 0)},
     {"obstacles": [], "objective": (7, 7), "start_pos": (1, 1)},
     {
-            "obstacles": [
-                (2, 2), (3, 2), (4, 2),
-                (4, 4), (4, 5),
-                (6, 2), (7, 2), (8, 2),
-                (6, 4), (6, 5),
-                (7, 8), (6, 8), (5, 8), (4, 8), (3, 8),
-                (8, 7), (2, 7), (7,9)
-            ],
-            "objective": (8, 8),
-            "start_pos": (0, 0)
-        }
+        "obstacles": [
+            (2, 2), (3, 2), (4, 2),
+            (4, 4), (4, 5),
+            (6, 2), (7, 2), (8, 2),
+            (6, 4), (6, 5),
+            (7, 8), (6, 8), (5, 8), (4, 8), (3, 8),
+            (8, 7), (2, 7), (7, 9)
+        ],
+        "objective": (8, 8),
+        "start_pos": (0, 0)
+    }
 ]
+
 
 def create_environment(scenario):
     amb = Ambiente(ENV_SIZE)
@@ -44,6 +45,7 @@ def create_environment(scenario):
     obj_pos = scenario["objective"]
     amb.add_object(Objective(obj_pos[0], obj_pos[1]))
     return amb
+
 
 def run_episode(weights, scenario):
     start_x, start_y = scenario["start_pos"]
@@ -94,6 +96,7 @@ def run_episode(weights, scenario):
         "reached": reached_objective
     }
 
+
 def create_random_weights():
     # Agora com 11 inputs em vez de 9
     return {
@@ -102,6 +105,7 @@ def create_random_weights():
         'left': [random.uniform(-1, 1) for _ in range(11)],
         'right': [random.uniform(-1, 1) for _ in range(11)]
     }
+
 
 def mutate(weights):
     new_weights = copy.deepcopy(weights)
@@ -113,6 +117,7 @@ def mutate(weights):
                 new_weights[action][i] = max(-5, min(5, new_weights[action][i]))
     return new_weights
 
+
 def crossover(parent1, parent2):
     child = {}
     for action in parent1:
@@ -123,6 +128,7 @@ def crossover(parent1, parent2):
             else:
                 child[action].append(parent2[action][i])
     return child
+
 
 def calculate_novelty(population_results):
     novelty_scores = []
@@ -149,6 +155,7 @@ def calculate_novelty(population_results):
 
     return novelty_scores
 
+
 def main():
     print(f"--- INICIANDO TREINO (Novelty Search) ---")
     print(f"Pop: {POPULATION_SIZE} | Gens: {GENERATIONS} | Inputs Neurais: 11")
@@ -164,12 +171,12 @@ def main():
         for weights in population:
             total_perf = 0
             behavior_vector = []
-            
+
             for scenario in ENV_SCENARIOS:
                 result = run_episode(weights, scenario)
                 total_perf += result["performance"]
                 behavior_vector.append(result["final_pos"])
-            
+
             avg_perf = total_perf / len(ENV_SCENARIOS)
             pop_results.append({
                 "weights": weights,
@@ -214,7 +221,7 @@ def main():
             child = crossover(p1, p2)
             child = mutate(child)
             new_population.append(child)
-            
+
         population = new_population
 
     print(f"Training Complete. Best Overall Performance: {best_overall_score}")
@@ -223,6 +230,7 @@ def main():
         with open("best_weights.json", "w") as f:
             json.dump(best_overall_weights, f)
         print("Saved best weights to best_weights.json")
+
 
 if __name__ == "__main__":
     main()
