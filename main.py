@@ -173,6 +173,7 @@ class Agent(Object):
         recompensa = 0  # Default reward
         self.avalicaoEstadoAtual(recompensa)
 
+
 class NeuralAgent(Agent):
     def __init__(self, x: int, y: int, name: str):
         super().__init__(x, y, name)
@@ -180,10 +181,14 @@ class NeuralAgent(Agent):
         self.path = []
         self.visit_counts = {}
 
-        # 11 Inputs como ya tenías
-        self.input_size = 11
+        # OPTIMIZED INPUTS (Reduced from 11 to 7)
+        # 0-3: Vision (Up, Down, Left, Right)
+        # 4-5: Vector to Goal (dx, dy)
+        # 6: Bias
+        self.input_size = 4
         self.actions = ['up', 'down', 'left', 'right']
 
+        # Weights initialized for 7 inputs
         self.weights = {
             'up': [random.uniform(-0.1, 0.1) for _ in range(self.input_size)],
             'down': [random.uniform(-0.1, 0.1) for _ in range(self.input_size)],
@@ -197,18 +202,19 @@ class NeuralAgent(Agent):
 
         self.last_state_inputs = None
         self.last_action = None
-        self.last_action_idx = 4
-        self.target_coords = None
+        # self.last_action_idx is DEAD. We removed it.
 
+        self.target_coords = None
         self.visit_counts[(x, y)] = 1
 
-        # 🧠 NUEVO: Memoria corta anti-bucles
         self.recent_positions = []
-        self.max_memory = 50
+        self.max_memory = 10
 
     def set_weights(self, weights):
+        # Validation to ensure we don't load old 11-input weights into a 7-input brain
         test_key = list(weights.keys())[0]
         if len(weights[test_key]) != self.input_size:
+            print(f"Weight mismatch! Expected {self.input_size}, got {len(weights[test_key])}")
             return
         self.weights = weights
 
@@ -217,38 +223,32 @@ class NeuralAgent(Agent):
         return sum(inputs[i] * w[i] for i in range(min(len(inputs), len(w))))
 
     def get_inputs(self, obs, ambiente):
+        # Initialize ONLY 4 inputs
         inputs = [0.0] * self.input_size
         mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
 
+        # We ONLY care about Vision now.
+        # The Heuristic handles direction, the Eyes handle obstacles.
         if obs:
             for direction, items in obs.items():
                 idx = mapping.get(direction)
                 if items and idx is not None:
                     obj_name, dist = items[0]
+                    # We only really care about obstacles now,
+                    # but seeing the goal (*) is still a nice bonus signal.
                     val = 1.0 / max(dist, 0.1)
                     if obj_name == '*':
                         inputs[idx] = val * 2.0
                     elif obj_name == '□':
                         inputs[idx] = -val
 
-        if self.target_coords:
-            tx, ty = self.target_coords
-            dx = tx - self.x
-            dy = ty - self.y
-            dist = math.sqrt(dx*dx + dy*dy) if dx or dy else 1.0
-            inputs[4] = dx / dist
-            inputs[5] = dy / dist
-
-        inputs[6] = 1.0
-        if self.last_action_idx < 4:
-            inputs[7 + self.last_action_idx] = 1.0
-
         return inputs
 
     def is_safe_move(self, action, ambiente):
-        mod = {'up': (0, -1),'down': (0, 1),'left': (-1, 0),'right': (1, 0)}[action]
+        mod = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}[action]
         tx, ty = self.x + mod[0], self.y + mod[1]
-        if not (0 <= tx < ambiente.size and 0 <= ty < ambiente.size): return False
+        if not (0 <= tx < ambiente.size and 0 <= ty < ambiente.size):
+            return False
         obj = ambiente.objects.get((tx, ty))
         return not isinstance(obj, Obstacle)
 
@@ -258,35 +258,52 @@ class NeuralAgent(Agent):
             if not safe: safe = self.actions
             accao = random.choice(safe)
             self.last_action = accao
-            self.last_action_idx = self.actions.index(accao)
             return Move(accao)
 
         scores = {}
+
+        # Calculate Hypotenuse for Heuristic
+        current_dist = float('inf')
+        if self.target_coords:
+            current_dist = math.hypot(self.target_coords[0] - self.x,
+                                      self.target_coords[1] - self.y)
+
         for action in self.actions:
+            # 1. Ask the Tiny Brain (Vision Only)
+            # "Is there a wall?" -> Brain returns negative value
             q_val = self.get_q_value(self.last_state_inputs, action)
 
             if not self.is_safe_move(action, ambiente):
                 q_val = -float('inf')
             else:
-                mod = {'up': (0, -1),'down': (0, 1),'left': (-1, 0),'right': (1, 0)}[action]
+                mod = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}[action]
                 target_pos = (self.x + mod[0], self.y + mod[1])
 
-                visits = self.visit_counts.get(target_pos, 0)
-                q_val -= visits * 50.5
+                # 2. Ask the GPS (Heuristic)
+                # "Is this closer to the goal?" -> GPS adds massive points
+                if self.target_coords:
+                    new_dist = math.hypot(self.target_coords[0] - target_pos[0],
+                                          self.target_coords[1] - target_pos[1])
 
-                # 🚫 NUEVO: Anti-bucle inmediato
+                    # We make the heuristic dominant
+                    dist_delta = current_dist - new_dist
+                    q_val += dist_delta * 5.0
+
+                visits = self.visit_counts.get(target_pos, 0)
+                q_val -= visits * 100.0
+
                 if target_pos in self.recent_positions:
-                    q_val -= 200.0
+                    q_val -= 2000.0
 
             scores[action] = q_val
 
         if random.random() < self.epsilon:
-            best_action = random.choice([a for a in self.actions if scores[a] > -float('inf')])
+            valid_actions = [a for a in self.actions if scores[a] > -float('inf')]
+            best_action = random.choice(valid_actions) if valid_actions else random.choice(self.actions)
         else:
             best_action = max(scores, key=scores.get)
 
         self.last_action = best_action
-        self.last_action_idx = self.actions.index(best_action)
         return Move(best_action)
 
     def learn(self, reward, new_inputs):
@@ -294,6 +311,7 @@ class NeuralAgent(Agent):
 
         current_q = self.get_q_value(self.last_state_inputs, self.last_action)
         max_next_q = max(self.get_q_value(new_inputs, a) for a in self.actions)
+
         target = reward + self.discount_factor * max_next_q
         error = target - current_q
 
@@ -302,10 +320,13 @@ class NeuralAgent(Agent):
                 self.weights[self.last_action][i] += self.learning_rate * error * self.last_state_inputs[i]
 
     def executar(self, ambiente):
+        # Always find objective
+        self.target_coords = None
         for pos, obj in ambiente.objects.items():
             if isinstance(obj, Objective):
                 self.target_coords = pos
                 break
+        if self.target_coords is None: self.target_coords = (self.x, self.y)
 
         obs = ambiente.observacaoPara(self)
         self.observacao(obs)
@@ -316,25 +337,20 @@ class NeuralAgent(Agent):
 
         target_x = self.x + accao.modifier[0]
         target_y = self.y + accao.modifier[1]
-        reward = -0.5
-        valid_move = True
+        reward = -0.1
 
         obj = ambiente.objects.get((target_x, target_y))
-        if obj is None:
-            pass
-        elif isinstance(obj, Objective):
-            reward += 50.0
+        if isinstance(obj, Objective):
+            reward += 100.0
             print(f"{self.name} reached the goal! Resetting memory!")
             self.recent_positions.clear()
+            self.visit_counts.clear()
         elif isinstance(obj, Obstacle):
-            reward -= 20.0
-            valid_move = False
+            reward -= 50.0
 
         if ambiente.agir(accao, self):
             self.path.append((self.x, self.y))
             self.visit_counts[(self.x, self.y)] = self.visit_counts.get((self.x, self.y), 0) + 1
-
-            # 🧠 NUEVO: memoria corta anti-loops
             self.recent_positions.append((self.x, self.y))
             if len(self.recent_positions) > self.max_memory:
                 self.recent_positions.pop(0)
@@ -606,6 +622,20 @@ if __name__ == "__main__":
             "objective": (9, 0),
             "start_pos": (0, 9)
         },
+        {
+            "obstacles": [
+                (1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1),
+                (1, 2), (8, 2),
+                (1, 3), (3, 3), (4, 3), (5, 3), (8, 3),
+                (1, 4), (5, 4), (8, 4),
+                (1, 5), (3, 5), (4, 5), (5, 5), (8, 5),
+                (1, 6), (8, 6),
+                (1, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7), (8, 7),
+                (1, 8), (8, 8), (0,1)
+            ],
+            "objective": (9, 0),
+            "start_pos": (0, 9)
+        },
 
         {
             "obstacles": [
@@ -638,7 +668,7 @@ if __name__ == "__main__":
         return amb
 
 
-    amb = create_environment(ENV_SCENARIOS[4])
+    amb = create_environment(ENV_SCENARIOS[0])
 
     simulador = Simulador(la, amb)
 
