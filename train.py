@@ -50,7 +50,7 @@ def create_environment(scenario):
 def run_episode(weights, scenario):
     start_x, start_y = scenario["start_pos"]
     agent = NeuralAgent(start_x, start_y, "N")
-    agent.instala(CircularSensor(3))
+    agent.instala(CircularSensor(1))
     agent.set_weights(weights)
 
     amb = create_environment(scenario)
@@ -98,12 +98,12 @@ def run_episode(weights, scenario):
 
 
 def create_random_weights():
-    # Agora com 11 inputs em vez de 9
+    # Agora com 4 inputs em vez de 9
     return {
-        'up': [random.uniform(-1, 1) for _ in range(11)],
-        'down': [random.uniform(-1, 1) for _ in range(11)],
-        'left': [random.uniform(-1, 1) for _ in range(11)],
-        'right': [random.uniform(-1, 1) for _ in range(11)]
+        'up': [random.uniform(-1, 1) for _ in range(4)],
+        'down': [random.uniform(-1, 1) for _ in range(4)],
+        'left': [random.uniform(-1, 1) for _ in range(4)],
+        'right': [random.uniform(-1, 1) for _ in range(4)]
     }
 
 

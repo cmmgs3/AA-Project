@@ -134,12 +134,13 @@ class FarolSensor(Sensor):
         self.farol = farol
 
     def sense(self, agente, ambiente):
-        return {"farol_delta": (abs(agente.x - self.farol.x), abs(agente.y - self.farol.y))}
+        return {"farol_dist": (math.hypot(agente.x - self.farol.x,
+                                          agente.y - self.farol.y),)}
 
 
 class Agent(Object):
     def __init__(self, x: int, y: int, name: str):
-        self.sensor = None
+        self.sensor = []
         self.ultima_observacao = None
         super().__init__(x, y, name)
 
@@ -160,7 +161,7 @@ class Agent(Object):
         pass
 
     def instala(self, sensor: Sensor):
-        self.sensor = sensor
+        self.sensor.append(sensor)
 
     def comunica(self, de_agente):
         pass
@@ -372,8 +373,10 @@ class Ambiente:
 
     def observacaoPara(self, agente: Agent) -> dict | None:
         if isinstance(agente, Agent):
-            if agente.sensor is not None:
-                return agente.sensor.sense(agente, self)
+            if agente.sensor:
+                obs = {}
+                for sensor in agente.sensor:
+                    obs.update(sensor.observacaoPara(agente))
         return None
 
     def atualizacao(self):
@@ -668,7 +671,7 @@ if __name__ == "__main__":
         return amb
 
 
-    amb = create_environment(ENV_SCENARIOS[0])
+    amb = create_environment(ENV_SCENARIOS[1])
 
     simulador = Simulador(la, amb)
 
