@@ -3,10 +3,10 @@ import json
 import copy
 import math
 
-from main import Ambiente, Obstacle, Objective, NeuralAgent, CircularSensor, Simulador
+from main import Ambiente, Obstacle, Objective, NeuralAgent, CircularSensor, Simulador, Farol, FarolSensor
 
 POPULATION_SIZE = 50
-GENERATIONS = 5  # Reduzi um pouco para veres resultados mais depressa
+GENERATIONS = 50  # Reduzi um pouco para veres resultados mais depressa
 SIMULATION_STEPS = 20
 MUTATION_RATE = 0.1
 MUTATION_STRENGTH = 0.2
@@ -17,12 +17,12 @@ NOVELTY_K = 15
 NOVELTY_WEIGHT = 0.5
 
 ENV_SCENARIOS = [
-    {"obstacles": [(2, 2), (3, 2), (4, 2)], "objective": (5, 5), "start_pos": (0, 0)},
-    {"obstacles": [(5, 0), (5, 1), (5, 2), (5, 3), (5, 4)], "objective": (8, 2), "start_pos": (2, 2)},
-    {"obstacles": [(3, 3), (4, 4), (5, 5), (6, 6)], "objective": (9, 9), "start_pos": (0, 0)},
+    {"obstacles": [(2, 2), (3, 2), (4, 2)], "objective": (5, 5), "start_pos": (0, 0), "farol": False },
+    {"obstacles": [(5, 0), (5, 1), (5, 2), (5, 3), (5, 4)], "objective": (8, 2), "start_pos": (2, 2), "farol": False},
+    {"obstacles": [(3, 3), (4, 4), (5, 5), (6, 6)], "objective": (9, 9), "start_pos": (0, 0), "farol": False},
     {"obstacles": [(3, 3), (4, 3), (5, 3), (3, 4), (5, 4), (3, 5), (4, 5), (5, 5)], "objective": (4, 4),
-     "start_pos": (0, 0)},
-    {"obstacles": [], "objective": (7, 7), "start_pos": (1, 1)},
+     "start_pos": (0, 0), "farol": False},
+    {"obstacles": [], "objective": (7, 7), "start_pos": (1, 1), "farol": False},
     {
         "obstacles": [
             (2, 2), (3, 2), (4, 2),
@@ -33,27 +33,49 @@ ENV_SCENARIOS = [
             (8, 7), (2, 7), (7, 9)
         ],
         "objective": (8, 8),
-        "start_pos": (0, 0)
+        "start_pos": (0, 0),
+        "farol": True
     }
 ]
 
 
-def create_environment(scenario):
-    amb = Ambiente(ENV_SIZE)
+def create_environment(scenario, agent: NeuralAgent | None = None):
+    """Create an Ambiente for the given scenario.
+
+    If `agent` is provided, the function will install the appropriate
+    sensors on that agent (so the caller's agent is correctly instrumented
+    according to whether the scenario has a farol). The Ambiente is
+    returned; callers are expected to add their agent (Simulador does this).
+    """
+    amb = Ambiente(10)
     for obs_pos in scenario["obstacles"]:
         amb.add_object(Obstacle(obs_pos[0], obs_pos[1]))
+
+    isfarol = scenario["farol"]
     obj_pos = scenario["objective"]
-    amb.add_object(Objective(obj_pos[0], obj_pos[1]))
+
+    # Add the target object to the environment
+    if isfarol:
+        farol = Farol(obj_pos[0], obj_pos[1])
+        amb.add_object(farol)
+        if agent is not None:
+            agent.instala(CircularSensor(1))
+            agent.instala(FarolSensor(farol))
+    else:
+        amb.add_object(Objective(obj_pos[0], obj_pos[1]))
+        if agent is not None:
+            agent.instala(CircularSensor(3))
+
     return amb
 
 
 def run_episode(weights, scenario):
     start_x, start_y = scenario["start_pos"]
     agent = NeuralAgent(start_x, start_y, "N")
-    agent.instala(CircularSensor(1))
     agent.set_weights(weights)
 
-    amb = create_environment(scenario)
+    # Create environment and install the correct sensors on our agent
+    amb = create_environment(scenario, agent)
     sim = Simulador([agent], amb)
 
     obj_x, obj_y = scenario["objective"]
@@ -158,7 +180,7 @@ def calculate_novelty(population_results):
 
 def main():
     print(f"--- INICIANDO TREINO (Novelty Search) ---")
-    print(f"Pop: {POPULATION_SIZE} | Gens: {GENERATIONS} | Inputs Neurais: 11")
+    print(f"Pop: {POPULATION_SIZE} | Gens: {GENERATIONS} | Inputs Neurais: 4")
 
     population = [create_random_weights() for _ in range(POPULATION_SIZE)]
     best_overall_weights = None
@@ -169,17 +191,61 @@ def main():
 
         # 1. Avaliação
         for weights in population:
+            # Create a single learning agent per genome so online RL updates
+            # accumulate into the final weights evaluated by the GA.
             total_perf = 0
             behavior_vector = []
 
+            # Start agent with genome weights
+            # Position will be reset per scenario below
+            # Use a deep copy of weights so we don't mutate the original population entry
+            agent = NeuralAgent(0, 0, "N")
+            agent.set_weights(copy.deepcopy(weights))
+            # Enable some exploration/learning during evaluation
+            agent.epsilon = 0.2
+            agent.learning_rate = 0.1
+
             for scenario in ENV_SCENARIOS:
-                result = run_episode(weights, scenario)
-                total_perf += result["performance"]
-                behavior_vector.append(result["final_pos"])
+                # Reset agent state for this scenario (position/path/sensors) but keep weights
+                start_x, start_y = scenario["start_pos"]
+                agent.x = start_x
+                agent.y = start_y
+                agent.path = []
+                agent.visit_counts = {(start_x, start_y): 1}
+                agent.recent_positions = []
+                agent.sensor = []
+
+                amb = create_environment(scenario, agent)
+                sim = Simulador([agent], amb)
+
+                obj_x, obj_y = scenario["objective"]
+                initial_dist = abs(start_x - obj_x) + abs(start_y - obj_y)
+                min_dist = initial_dist
+                reached_objective = False
+
+                for _ in range(SIMULATION_STEPS):
+                    win = sim.executa()
+                    dist = abs(agent.x - obj_x) + abs(agent.y - obj_y)
+                    if dist < min_dist:
+                        min_dist = dist
+                    if win:
+                        reached_objective = True
+                        min_dist = 0
+                        break
+
+                improvement = initial_dist - min_dist
+                performance_score = improvement * 5
+                if reached_objective:
+                    performance_score += 100
+
+                total_perf += performance_score
+                behavior_vector.append((agent.x, agent.y))
 
             avg_perf = total_perf / len(ENV_SCENARIOS)
+            # Use the agent's post-learning weights as the representative genome
+            final_weights = copy.deepcopy(agent.weights)
             pop_results.append({
-                "weights": weights,
+                "weights": final_weights,
                 "performance": avg_perf,
                 "behavior_vector": behavior_vector
             })

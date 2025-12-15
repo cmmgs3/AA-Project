@@ -52,8 +52,8 @@ class Accao:
 
 class Move(Accao):
     def __init__(self, direction):
-        if direction != "right" and direction != "left" and direction != "up" and direction != "down":
-            return
+        if direction not in ("up", "down", "left", "right"):
+            raise ValueError(f"Invalid move direction: {direction}")
 
         if direction == "up":
             self.modifier = (0, -1)
@@ -63,8 +63,6 @@ class Move(Accao):
             self.modifier = (1, 0)
         elif direction == "left":
             self.modifier = (-1, 0)
-        else:
-            return
 
     def act(self, agente, ambiente):
         current_location = (agente.x, agente.y)
@@ -134,8 +132,7 @@ class FarolSensor(Sensor):
         self.farol = farol
 
     def sense(self, agente, ambiente):
-        return {"farol_dist": (math.hypot(agente.x - self.farol.x,
-                                          agente.y - self.farol.y),)}
+        return {"farol_coord" : (self.farol.x, self.farol.y)}
 
 
 class Agent(Object):
@@ -182,14 +179,12 @@ class NeuralAgent(Agent):
         self.path = []
         self.visit_counts = {}
 
-        # OPTIMIZED INPUTS (Reduced from 11 to 7)
+        # OPTIMIZED INPUTS
         # 0-3: Vision (Up, Down, Left, Right)
-        # 4-5: Vector to Goal (dx, dy)
-        # 6: Bias
         self.input_size = 4
         self.actions = ['up', 'down', 'left', 'right']
 
-        # Weights initialized for 7 inputs
+        # Weights initialized for 4 inputs
         self.weights = {
             'up': [random.uniform(-0.1, 0.1) for _ in range(self.input_size)],
             'down': [random.uniform(-0.1, 0.1) for _ in range(self.input_size)],
@@ -202,28 +197,39 @@ class NeuralAgent(Agent):
         self.epsilon = 0.0
 
         self.last_state_inputs = None
-        self.last_action = None
-        # self.last_action_idx is DEAD. We removed it.
+        self.last_direction = None
 
-        self.target_coords = None
+        self.farol_coord = None
         self.visit_counts[(x, y)] = 1
 
         self.recent_positions = []
         self.max_memory = 10
 
     def set_weights(self, weights):
-        # Validation to ensure we don't load old 11-input weights into a 7-input brain
-        test_key = list(weights.keys())[0]
-        if len(weights[test_key]) != self.input_size:
-            print(f"Weight mismatch! Expected {self.input_size}, got {len(weights[test_key])}")
+        # Validation to ensure shape matches expected network
+        if not isinstance(weights, dict) or len(weights) == 0:
+            print("Invalid weights format (expected non-empty dict)")
             return
+
+        # Ensure all expected actions exist
+        for a in self.actions:
+            if a not in weights:
+                print(f"Weights missing action '{a}' - aborting load")
+                return
+
+        # Ensure each weight vector has the correct input size
+        for a, vec in weights.items():
+            if not isinstance(vec, list) or len(vec) != self.input_size:
+                print(f"Weight mismatch for action '{a}': expected length {self.input_size}, got {len(vec) if isinstance(vec, list) else 'invalid'}")
+                return
+
         self.weights = weights
 
     def get_q_value(self, inputs, action):
         w = self.weights[action]
         return sum(inputs[i] * w[i] for i in range(min(len(inputs), len(w))))
 
-    def get_inputs(self, obs, ambiente):
+    def get_inputs(self, obs):
         # Initialize ONLY 4 inputs
         inputs = [0.0] * self.input_size
         mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
@@ -234,7 +240,12 @@ class NeuralAgent(Agent):
             for direction, items in obs.items():
                 idx = mapping.get(direction)
                 if items and idx is not None:
-                    obj_name, dist = items[0]
+                    # items is expected to be a list of (name, dist)
+                    try:
+                        obj_name, dist = items[0]
+                    except Exception:
+                        # If the sensor returned an unexpected format, skip
+                        continue
                     # We only really care about obstacles now,
                     # but seeing the goal (*) is still a nice bonus signal.
                     val = 1.0 / max(dist, 0.1)
@@ -242,112 +253,117 @@ class NeuralAgent(Agent):
                         inputs[idx] = val * 2.0
                     elif obj_name == '□':
                         inputs[idx] = -val
-
         return inputs
 
-    def is_safe_move(self, action, ambiente):
-        mod = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}[action]
-        tx, ty = self.x + mod[0], self.y + mod[1]
-        if not (0 <= tx < ambiente.size and 0 <= ty < ambiente.size):
-            return False
-        obj = ambiente.objects.get((tx, ty))
-        return not isinstance(obj, Obstacle)
-
-    def age(self, ambiente) -> Accao:
+    # Note: accept ambiente optionally so the agent can penalize invalid moves
+    def age(self, ambiente=None) -> Accao:
         if self.last_state_inputs is None:
-            safe = [a for a in self.actions if self.is_safe_move(a, ambiente)]
-            if not safe: safe = self.actions
-            accao = random.choice(safe)
-            self.last_action = accao
-            return Move(accao)
+            direction = random.choice(self.actions)
+            self.last_direction = direction
+            return Move(direction)
 
         scores = {}
-
-        # Calculate Hypotenuse for Heuristic
-        current_dist = float('inf')
-        if self.target_coords:
-            current_dist = math.hypot(self.target_coords[0] - self.x,
-                                      self.target_coords[1] - self.y)
 
         for action in self.actions:
             # 1. Ask the Tiny Brain (Vision Only)
             # "Is there a wall?" -> Brain returns negative value
             q_val = self.get_q_value(self.last_state_inputs, action)
 
-            if not self.is_safe_move(action, ambiente):
-                q_val = -float('inf')
-            else:
-                mod = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}[action]
-                target_pos = (self.x + mod[0], self.y + mod[1])
+            mod = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}[action]
+            target_pos = (self.x + mod[0], self.y + mod[1])
 
-                # 2. Ask the GPS (Heuristic)
-                # "Is this closer to the goal?" -> GPS adds massive points
-                if self.target_coords:
-                    new_dist = math.hypot(self.target_coords[0] - target_pos[0],
-                                          self.target_coords[1] - target_pos[1])
+            # If we have access to the environment, mark invalid/off-grid or blocked moves very low
+            if ambiente is not None:
+                # Check bounds
+                if (target_pos[0] < 0 or target_pos[0] >= ambiente.size or
+                        target_pos[1] < 0 or target_pos[1] >= ambiente.size):
+                    q_val = -float('inf')
+                    scores[action] = q_val
+                    continue
 
-                    # We make the heuristic dominant
-                    dist_delta = current_dist - new_dist
-                    q_val += dist_delta * 5.0
+                # Check collision (cannot move into occupied cell)
+                obj_at_target = ambiente.objects.get(target_pos)
+                if obj_at_target is not None:
+                    # It's occupied (obstacle, another agent, objective, etc.) -> invalid move
+                    q_val = -float('inf')
+                    scores[action] = q_val
+                    continue
 
-                visits = self.visit_counts.get(target_pos, 0)
-                q_val -= visits * 100.0
+            # 2. Ask the GPS (Heuristic)
+            # "Is this closer to the goal?" -> GPS adds massive points
+            if self.farol_coord:
+                current_dist = math.hypot(
+                    self.farol_coord[0] - self.x,
+                    self.farol_coord[1] - self.y
+                )
+                new_dist = math.hypot(
+                    self.farol_coord[0] - target_pos[0],
+                    self.farol_coord[1] - target_pos[1]
+                )
+                # We make the heuristic dominant
+                dist_delta = current_dist - new_dist
+                q_val += dist_delta * 5.0
 
-                if target_pos in self.recent_positions:
-                    q_val -= 2000.0
+            visits = self.visit_counts.get(target_pos, 0)
+            q_val -= visits * 10.0
+            if target_pos in self.recent_positions:
+                q_val -= 20.0
 
             scores[action] = q_val
 
         if random.random() < self.epsilon:
-            valid_actions = [a for a in self.actions if scores[a] > -float('inf')]
+            valid_actions = [a for a in self.actions if scores.get(a, -float('inf')) > -float('inf')]
             best_action = random.choice(valid_actions) if valid_actions else random.choice(self.actions)
         else:
-            best_action = max(scores, key=scores.get)
+            # pick max but ignore -inf entries (invalid moves)
+            valid_scores = {a: s for a, s in scores.items() if s > -float('inf')}
+            if not valid_scores:
+                best_action = random.choice(self.actions)
+            else:
+                best_action = max(valid_scores, key=valid_scores.get)
 
-        self.last_action = best_action
+        self.last_direction = best_action
         return Move(best_action)
 
     def learn(self, reward, new_inputs):
-        if self.last_state_inputs is None or self.last_action is None: return
+        # Ensure we have a previous state and action
+        if self.last_state_inputs is None or self.last_direction is None:
+            return
 
-        current_q = self.get_q_value(self.last_state_inputs, self.last_action)
+        if self.last_direction not in self.weights:
+            return
+
+        current_q = self.get_q_value(self.last_state_inputs, self.last_direction)
         max_next_q = max(self.get_q_value(new_inputs, a) for a in self.actions)
 
         target = reward + self.discount_factor * max_next_q
         error = target - current_q
 
-        for i in range(len(self.weights[self.last_action])):
+        for i in range(len(self.weights[self.last_direction])):
             if i < len(self.last_state_inputs):
-                self.weights[self.last_action][i] += self.learning_rate * error * self.last_state_inputs[i]
+                self.weights[self.last_direction][i] += self.learning_rate * error * self.last_state_inputs[i]
+
+        # Move to the new state for the next step so subsequent learns use updated context
+        if isinstance(new_inputs, list) and len(new_inputs) == self.input_size:
+            self.last_state_inputs = new_inputs
+        else:
+            # If new_inputs are malformed, clear last_state to avoid incorrect learning
+            self.last_state_inputs = None
 
     def executar(self, ambiente):
-        # Always find objective
-        self.target_coords = None
-        for pos, obj in ambiente.objects.items():
-            if isinstance(obj, Objective):
-                self.target_coords = pos
-                break
-        if self.target_coords is None: self.target_coords = (self.x, self.y)
-
         obs = ambiente.observacaoPara(self)
         self.observacao(obs)
-        current_inputs = self.get_inputs(obs, ambiente)
+
+        if self.ultima_observacao and "farol_coord" in self.ultima_observacao:
+            self.farol_coord = self.ultima_observacao["farol_coord"]
+        else:
+            self.farol_coord = None
+
+        current_inputs = self.get_inputs(obs)
         self.last_state_inputs = current_inputs
 
+        # Pass the environment to age() so the agent can avoid invalid moves
         accao = self.age(ambiente)
-
-        target_x = self.x + accao.modifier[0]
-        target_y = self.y + accao.modifier[1]
-        reward = -0.1
-
-        obj = ambiente.objects.get((target_x, target_y))
-        if isinstance(obj, Objective):
-            reward += 100.0
-            print(f"{self.name} reached the goal! Resetting memory!")
-            self.recent_positions.clear()
-            self.visit_counts.clear()
-        elif isinstance(obj, Obstacle):
-            reward -= 50.0
 
         if ambiente.agir(accao, self):
             self.path.append((self.x, self.y))
@@ -355,9 +371,12 @@ class NeuralAgent(Agent):
             self.recent_positions.append((self.x, self.y))
             if len(self.recent_positions) > self.max_memory:
                 self.recent_positions.pop(0)
+            reward = -0.05
+        else:
+            reward = -0.5
 
         new_obs = ambiente.observacaoPara(self)
-        new_inputs = self.get_inputs(new_obs, ambiente)
+        new_inputs = self.get_inputs(new_obs)
         self.learn(reward, new_inputs)
 
 
@@ -372,11 +391,11 @@ class Ambiente:
             self.objects[target_pos] = obj
 
     def observacaoPara(self, agente: Agent) -> dict | None:
-        if isinstance(agente, Agent):
-            if agente.sensor:
-                obs = {}
-                for sensor in agente.sensor:
-                    obs.update(sensor.observacaoPara(agente))
+        if isinstance(agente, Agent) and agente.sensor:
+            obs = {}
+            for sensor in agente.sensor:
+                obs.update(sensor.sense(agente, self))
+            return obs
         return None
 
     def atualizacao(self):
@@ -414,7 +433,7 @@ class Simulador:
     def executa(self):
         objectives = []
         for obj in self.ambiente.objects.values():
-            if isinstance(obj, Objective):
+            if isinstance(obj, Objective) or isinstance(obj, Farol):
                 objectives.append(obj)
         self.ambiente.atualizacao()
         for agent in self.listaAgentes:
@@ -500,19 +519,22 @@ class SimulationGUI:
                 if obj:
                     text = obj.name
                     if isinstance(obj, Agent):
-                        bg_color = '#4DD0E1'  # Azul
+                        bg_color = '#4DD0E1'
                         fg_color = 'black'
                     elif isinstance(obj, Obstacle):
-                        bg_color = '#757575'  # Cinzento
+                        bg_color = '#757575'
                         fg_color = 'white'
+                    elif isinstance(obj, Farol):
+                        bg_color = '#8BC34A'
+                        fg_color = 'yellow'
                     elif isinstance(obj, Objective):
-                        bg_color = '#8BC34A'  # Verde
+                        bg_color = '#8BC34A'
                         fg_color = 'black'
 
                 self.cells[r][c].config(text=text, bg=bg_color, fg=fg_color,
                                         relief='raised' if obj else 'ridge')
 
-        # 2. Atualizar Texto de Perceção
+        # Update the vision
         self.vision_text.config(state=tk.NORMAL)
         self.vision_text.delete(1.0, tk.END)
 
@@ -524,9 +546,12 @@ class SimulationGUI:
                 for direction, items in obs.items():
                     self.vision_text.insert(tk.END, f"  {direction}: ")
                     if items:
-                        # items is list of (name, dist)
-                        display_items = [f"{name}({dist})" for name, dist in items]
-                        self.vision_text.insert(tk.END, f"{', '.join(display_items)}\n")
+                        if isinstance(items, dict):
+                            # items is list of (name, dist)
+                            display_items = [f"{name}({dist})" for name, dist in items]
+                            self.vision_text.insert(tk.END, f"{', '.join(display_items)}\n")
+                        else:
+                            self.vision_text.insert(tk.END, f"{(str(items))}\n")
                     else:
                         self.vision_text.insert(tk.END, "-\n", 'dim')
             else:
@@ -575,7 +600,8 @@ if __name__ == "__main__":
                 (8, 7), (2, 7), (9, 7)
             ],
             "objective": (8, 8),
-            "start_pos": (0, 0)
+            "start_pos": (0, 0),
+            "farol": True
         },
         {
             "obstacles": [
@@ -587,7 +613,8 @@ if __name__ == "__main__":
                 (8, 7), (2, 7), (7, 9)
             ],
             "objective": (8, 8),
-            "start_pos": (0, 0)
+            "start_pos": (0, 0),
+            "farol": False
         },
         {
             "obstacles": [
@@ -608,7 +635,8 @@ if __name__ == "__main__":
                 (5, 7), (6, 7), (7, 7)
             ],
             "objective": (8, 7),
-            "start_pos": (1, 2)
+            "start_pos": (1, 2),
+            "farol": False
         },
 
         {
@@ -623,7 +651,8 @@ if __name__ == "__main__":
                 (1, 8), (8, 8),(9,1)
             ],
             "objective": (9, 0),
-            "start_pos": (0, 9)
+            "start_pos": (0, 9),
+            "farol": True
         },
         {
             "obstacles": [
@@ -637,7 +666,8 @@ if __name__ == "__main__":
                 (1, 8), (8, 8), (0,1)
             ],
             "objective": (9, 0),
-            "start_pos": (0, 9)
+            "start_pos": (0, 9),
+            "farol": False
         },
 
         {
@@ -650,7 +680,8 @@ if __name__ == "__main__":
                 (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7)
             ],
             "objective": (9, 5),
-            "start_pos": (0, 4)
+            "start_pos": (0, 4),
+            "farol": True
         }
 
     ]
@@ -661,12 +692,21 @@ if __name__ == "__main__":
         for obs_pos in scenario["obstacles"]:
             amb.add_object(Obstacle(obs_pos[0], obs_pos[1]))
 
-        obj_pos = scenario["objective"]
-        amb.add_object(Objective(obj_pos[0], obj_pos[1]))
-
+        isfarol = scenario["farol"]
         start_x, start_y = scenario["start_pos"]
         agent = NeuralAgent(start_x, start_y, "N")
-        agent.instala(CircularSensor(3))
+
+        obj_pos = scenario["objective"]
+        # If map has farol, loads FarolSensor, else loads CircularSensor
+        if isfarol:
+            farol = Farol(obj_pos[0], obj_pos[1])
+            amb.add_object(farol)
+            agent.instala(CircularSensor(1))
+            agent.instala(FarolSensor(farol))
+        else:
+            amb.add_object(Objective(obj_pos[0], obj_pos[1]))
+            agent.instala(CircularSensor(3))
+
         la.append(agent)
         return amb
 
@@ -690,3 +730,4 @@ if __name__ == "__main__":
 
     gui = SimulationGUI(root, simulador)
     root.mainloop()
+
