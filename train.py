@@ -2,15 +2,31 @@ import random
 import json
 import copy
 import math
+import os
+from pathlib import Path
 
 from main import Ambiente, Obstacle, Objective, NeuralAgent, CircularSensor, Simulador, Farol, FarolSensor
 
-POPULATION_SIZE = 50
-GENERATIONS = 50  # Reduzi um pouco para veres resultados mais depressa
+# Added plotting dependencies
+try:
+    import matplotlib.pyplot as plt
+    import numpy as np
+except Exception:
+    plt = None
+    np = None
+
+POPULATION_SIZE = 100
+GENERATIONS = 100  # Reduzi um pouco para veres resultados mais depressa
 SIMULATION_STEPS = 20
 MUTATION_RATE = 0.1
 MUTATION_STRENGTH = 0.2
 ENV_SIZE = 10
+
+# Checkpoint / plotting directories
+CHECKPOINT_DIR = Path("checkpoints")
+PLOTS_DIR = Path("plots")
+CHECKPOINT_DIR.mkdir(exist_ok=True)
+PLOTS_DIR.mkdir(exist_ok=True)
 
 # Novelty Parameters
 NOVELTY_K = 15
@@ -186,6 +202,17 @@ def main():
     best_overall_weights = None
     best_overall_score = -float('inf')
 
+    # History collectors for plotting
+    best_fitness_history = []
+    avg_fitness_history = []
+    best_perf_history = []
+    avg_perf_history = []
+    novelty_avg_history = []
+
+    actions = ['up', 'down', 'left', 'right']
+    # mean weights history: action -> input_index -> list over generations
+    mean_weights_history = {a: [[] for _ in range(4)] for a in actions}
+
     for gen in range(GENERATIONS):
         pop_results = []
 
@@ -275,7 +302,36 @@ def main():
             best_entry = max(final_scored_pop, key=lambda x: x[2])
             best_overall_weights = best_entry[1]
 
+        # --- Metrics for checkpointing & plotting ---
+        fitness_values = [x[0] for x in final_scored_pop]
+        perf_values = [x[2] for x in final_scored_pop]
+        avg_fitness = sum(fitness_values) / len(fitness_values)
+        avg_perf = sum(perf_values) / len(perf_values)
+
+        best_fitness_history.append(fitness_values[0])
+        avg_fitness_history.append(avg_fitness)
+        best_perf_history.append(gen_best_perf)
+        avg_perf_history.append(avg_perf)
+        novelty_avg_history.append(sum(novelty_scores) / len(novelty_scores) if novelty_scores else 0)
+
+        # Compute mean weights across current population for each action/input
+        for action in actions:
+            for idx in range(4):
+                vals = [ind[action][idx] for ind in population]
+                mean_weights_history[action][idx].append(sum(vals) / len(vals))
+
         print(f"Gen {gen + 1}: Best Fitness={final_scored_pop[0][0]:.1f} | Best Perf={gen_best_perf:.1f}")
+
+        # Save checkpoint (top 5 weights of the generation)
+        checkpoint = {
+            'generation': gen + 1,
+            'top_weights': [entry[1] for entry in final_scored_pop[:5]],
+            'top_fitness': final_scored_pop[0][0],
+            'avg_fitness': avg_fitness,
+            'best_perf': gen_best_perf,
+        }
+        with open(CHECKPOINT_DIR / f"checkpoint_gen_{gen+1}.json", "w") as f:
+            json.dump(checkpoint, f, indent=2)
 
         # 4. Seleção e Reprodução
         survivors = [x[1] for x in final_scored_pop[:int(POPULATION_SIZE * 0.2)]]  # Top 20%
@@ -292,10 +348,72 @@ def main():
 
     print(f"Training Complete. Best Overall Performance: {best_overall_score}")
 
+    # Save best overall weights
     if best_overall_weights:
         with open("best_weights.json", "w") as f:
             json.dump(best_overall_weights, f)
         print("Saved best weights to best_weights.json")
+
+    # --- Plotting ---
+    if plt is None:
+        print("matplotlib not available; skipping plots. Install matplotlib to enable plots.")
+        return
+
+    gens = list(range(1, GENERATIONS + 1))
+
+    # Fitness/Performance plot
+    plt.figure()
+    plt.plot(gens, best_fitness_history, label='Best Fitness')
+    plt.plot(gens, avg_fitness_history, label='Avg Fitness')
+    plt.plot(gens, best_perf_history, label='Best Perf')
+    plt.plot(gens, avg_perf_history, label='Avg Perf')
+    plt.xlabel('Generation')
+    plt.ylabel('Score')
+    plt.title('Fitness and Performance over Generations')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / 'fitness_performance.png')
+    plt.close()
+
+    # Novelty plot
+    plt.figure()
+    plt.plot(gens, novelty_avg_history, label='Avg Novelty')
+    plt.xlabel('Generation')
+    plt.ylabel('Novelty (avg)')
+    plt.title('Average Novelty over Generations')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / 'novelty.png')
+    plt.close()
+
+    # Weights evolution plots (mean per-action per-input)
+    for action in actions:
+        plt.figure()
+        for idx in range(4):
+            plt.plot(gens, mean_weights_history[action][idx], label=f'input_{idx}')
+        plt.xlabel('Generation')
+        plt.ylabel('Mean Weight')
+        plt.title(f'Mean Weights for action: {action}')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(PLOTS_DIR / f'weights_mean_{action}.png')
+        plt.close()
+
+    # Save a small summary JSON (metrics) for external analysis
+    summary = {
+        'best_fitness_history': best_fitness_history,
+        'avg_fitness_history': avg_fitness_history,
+        'best_perf_history': best_perf_history,
+        'avg_perf_history': avg_perf_history,
+        'novelty_avg_history': novelty_avg_history,
+        'generations': GENERATIONS
+    }
+    with open(CHECKPOINT_DIR / 'training_summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"Saved plots to {PLOTS_DIR} and checkpoints to {CHECKPOINT_DIR}")
 
 
 if __name__ == "__main__":
