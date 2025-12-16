@@ -2,11 +2,13 @@ import random
 import json
 import copy
 import math
-import os
 from pathlib import Path
 
 from main import Ambiente, Obstacle, Objective, NeuralAgent, CircularSensor, Simulador, Farol, FarolSensor
 
+# Detect agent input size dynamically so training scripts stay in sync with main.py
+_TEMP_AGENT = NeuralAgent(0, 0, "N")
+INPUT_SIZE = _TEMP_AGENT.input_size
 # Added plotting dependencies
 try:
     import matplotlib.pyplot as plt
@@ -51,6 +53,40 @@ ENV_SCENARIOS = [
         "objective": (8, 8),
         "start_pos": (0, 0),
         "farol": True
+    },
+    {
+            "obstacles": [
+                (3, 1), (4, 1), (5, 1), (6, 1), (7, 1),(8,1), (9,1),
+                (1, 2),
+                (1, 3), (3, 3), (4, 3), (5, 3), (6, 3), (8, 3),
+                (1, 4), (6, 4), (8, 4),
+                (1, 5), (3, 5), (4, 5), (5, 5), (6, 5), (8, 5),
+                (1, 6), (8, 6),
+                (1, 7), (3, 7), (4, 7), (5, 7), (6, 7), (8, 7),
+                (3, 8), (8, 8),
+                (1, 9), (8, 9),
+            ],
+            "objective": (9,9),
+            "start_pos": (0,0),
+            "farol": False
+        },
+
+    {
+            "obstacles": [
+                (1, 0),
+                (1,1), (3, 1), (4, 1), (5, 1), (6, 1), (8, 1), (9, 1),
+                (1, 2),
+                (1, 3), (3, 3), (4, 3), (5, 3), (6, 3), (8, 3),
+                (1, 4), (6, 4), (8, 4),
+                (1, 5), (3, 5), (4, 5), (5, 5), (6, 5), (8, 5),
+                (1, 6), (8, 6),
+                (1, 7), (3, 7), (4, 7), (5, 7), (6, 7), (8, 7),
+                (3, 8), (8, 8),
+                (1, 9), (8, 9),
+            ],
+            "objective": (9, 9),
+            "start_pos": (0, 0),
+            "farol": False
     }
 ]
 
@@ -131,17 +167,18 @@ def run_episode(weights, scenario):
         "performance": performance_score,
         "final_pos": (agent.x, agent.y),
         "path": agent.path,
+        "steps": steps_taken,
         "reached": reached_objective
     }
 
 
 def create_random_weights():
-    # Agora com 4 inputs em vez de 9
+    # Create weight vectors sized to the agent's current input dimension
     return {
-        'up': [random.uniform(-1, 1) for _ in range(4)],
-        'down': [random.uniform(-1, 1) for _ in range(4)],
-        'left': [random.uniform(-1, 1) for _ in range(4)],
-        'right': [random.uniform(-1, 1) for _ in range(4)]
+        'up': [random.uniform(-1, 1) for _ in range(INPUT_SIZE)],
+        'down': [random.uniform(-1, 1) for _ in range(INPUT_SIZE)],
+        'left': [random.uniform(-1, 1) for _ in range(INPUT_SIZE)],
+        'right': [random.uniform(-1, 1) for _ in range(INPUT_SIZE)]
     }
 
 
@@ -196,7 +233,7 @@ def calculate_novelty(population_results):
 
 def main():
     print(f"--- INICIANDO TREINO (Novelty Search) ---")
-    print(f"Pop: {POPULATION_SIZE} | Gens: {GENERATIONS} | Inputs Neurais: 4")
+    print(f"Pop: {POPULATION_SIZE} | Gens: {GENERATIONS} | Inputs Neurais: {INPUT_SIZE}")
 
     population = [create_random_weights() for _ in range(POPULATION_SIZE)]
     best_overall_weights = None
@@ -211,7 +248,10 @@ def main():
 
     actions = ['up', 'down', 'left', 'right']
     # mean weights history: action -> input_index -> list over generations
-    mean_weights_history = {a: [[] for _ in range(4)] for a in actions}
+    mean_weights_history = {a: [[] for _ in range(INPUT_SIZE)] for a in actions}
+
+    # Record the best individual's per-scenario paths for each generation
+    best_paths_history = []
 
     for gen in range(GENERATIONS):
         pop_results = []
@@ -222,6 +262,7 @@ def main():
             # accumulate into the final weights evaluated by the GA.
             total_perf = 0
             behavior_vector = []
+            paths = []
 
             # Start agent with genome weights
             # Position will be reset per scenario below
@@ -267,6 +308,8 @@ def main():
 
                 total_perf += performance_score
                 behavior_vector.append((agent.x, agent.y))
+                # Save the visited path (list of (x,y)) for this scenario
+                paths.append(copy.deepcopy(agent.path))
 
             avg_perf = total_perf / len(ENV_SCENARIOS)
             # Use the agent's post-learning weights as the representative genome
@@ -274,7 +317,8 @@ def main():
             pop_results.append({
                 "weights": final_weights,
                 "performance": avg_perf,
-                "behavior_vector": behavior_vector
+                "behavior_vector": behavior_vector,
+                "paths": paths
             })
 
         # 2. Novelty
@@ -287,7 +331,8 @@ def main():
         for i, res in enumerate(pop_results):
             # Normalizar Novelty pode ajudar, mas aqui somamos direto com peso
             fitness = res["performance"] + (novelty_scores[i] * NOVELTY_WEIGHT)
-            final_scored_pop.append((fitness, res["weights"], res["performance"]))
+            # Include the whole res so we can access paths later
+            final_scored_pop.append((fitness, res["weights"], res["performance"], res))
 
             if res["performance"] > gen_best_perf:
                 gen_best_perf = res["performance"]
@@ -301,6 +346,13 @@ def main():
             # Encontrar o conjunto de pesos com melhor performance pura nesta geração
             best_entry = max(final_scored_pop, key=lambda x: x[2])
             best_overall_weights = best_entry[1]
+
+        # Record the top individual's paths for this generation (aggregate of all scenarios)
+        if final_scored_pop:
+            top_res = final_scored_pop[0][3]
+            best_paths_history.append(top_res.get('paths', []))
+        else:
+            best_paths_history.append([])
 
         # --- Metrics for checkpointing & plotting ---
         fitness_values = [x[0] for x in final_scored_pop]
@@ -316,7 +368,7 @@ def main():
 
         # Compute mean weights across current population for each action/input
         for action in actions:
-            for idx in range(4):
+            for idx in range(INPUT_SIZE):
                 vals = [ind[action][idx] for ind in population]
                 mean_weights_history[action][idx].append(sum(vals) / len(vals))
 
@@ -390,7 +442,7 @@ def main():
     # Weights evolution plots (mean per-action per-input)
     for action in actions:
         plt.figure()
-        for idx in range(4):
+        for idx in range(INPUT_SIZE):
             plt.plot(gens, mean_weights_history[action][idx], label=f'input_{idx}')
         plt.xlabel('Generation')
         plt.ylabel('Mean Weight')
@@ -400,6 +452,36 @@ def main():
         plt.tight_layout()
         plt.savefig(PLOTS_DIR / f'weights_mean_{action}.png')
         plt.close()
+
+    # Heatmap(s): cumulative over generations showing aggregated visit counts of best individuals
+    # Each saved image for generation N aggregates paths from best individuals of generations 1..N
+    if np is not None:
+        # Build a single cumulative grid that aggregates visits from the best individual of each generation
+        cumulative_grid = np.zeros((ENV_SIZE, ENV_SIZE), dtype=float)
+        for gen_paths in best_paths_history:
+            for scenario_path in gen_paths:
+                if not scenario_path:
+                    continue
+                for pos in scenario_path:
+                    try:
+                        x, y = pos
+                    except Exception:
+                        continue
+                    if 0 <= x < ENV_SIZE and 0 <= y < ENV_SIZE:
+                        cumulative_grid[y, x] += 1.0
+
+        # Save only the final combined heatmap (no per-generation snapshots)
+        plt.figure(figsize=(6, 6))
+        plt.imshow(cumulative_grid, cmap='hot', origin='lower')
+        plt.colorbar(label='Cumulative Visit Count')
+        plt.title('Final cumulative heatmap (all generations)')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.tight_layout()
+        plt.savefig(PLOTS_DIR / 'heatmap_cumulative_all_generations.png')
+        plt.close()
+    else:
+         print('numpy not available; skipping heatmap generation.')
 
     # Save a small summary JSON (metrics) for external analysis
     summary = {

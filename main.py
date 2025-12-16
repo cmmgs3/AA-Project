@@ -181,7 +181,8 @@ class NeuralAgent(Agent):
 
         # OPTIMIZED INPUTS
         # 0-3: Vision (Up, Down, Left, Right)
-        self.input_size = 4
+        # 4: bias (constant 1.0)
+        self.input_size = 5
         self.actions = ['up', 'down', 'left', 'right']
 
         # Weights initialized for 4 inputs
@@ -204,6 +205,10 @@ class NeuralAgent(Agent):
 
         self.recent_positions = []
         self.max_memory = 10
+
+        # Track last-seen objective (direction, distance) from sensors
+        # This is local memory derived only from `ultima_observacao` (no global knowledge)
+        self.last_seen_goal = None  # (direction_str, distance_int) or None
 
     def set_weights(self, weights):
         # Validation to ensure shape matches expected network
@@ -230,8 +235,8 @@ class NeuralAgent(Agent):
         return sum(inputs[i] * w[i] for i in range(min(len(inputs), len(w))))
 
     def get_inputs(self, obs):
-        # Initialize ONLY 4 inputs
-        inputs = [0.0] * self.input_size
+        # Initialize 4 vision inputs + bias (last index)
+        inputs = [0.0] * (self.input_size - 1)
         mapping = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
 
         # We ONLY care about Vision now.
@@ -253,6 +258,8 @@ class NeuralAgent(Agent):
                         inputs[idx] = val * 2.0
                     elif obj_name == '□':
                         inputs[idx] = -val
+        # append bias feature so weights can change even when no objects are seen
+        inputs.append(1.0)
         return inputs
 
     # Note: accept ambiente optionally so the agent can penalize invalid moves
@@ -305,9 +312,10 @@ class NeuralAgent(Agent):
                 q_val += dist_delta * 5.0
 
             visits = self.visit_counts.get(target_pos, 0)
-            q_val -= visits * 10.0
+            # small discouragement for revisiting same cell; don't dominate learned Q
+            q_val -= visits * 0.5
             if target_pos in self.recent_positions:
-                q_val -= 20.0
+                q_val -= 1.0
 
             scores[action] = q_val
 
@@ -339,9 +347,25 @@ class NeuralAgent(Agent):
         target = reward + self.discount_factor * max_next_q
         error = target - current_q
 
+        # Stabilize updates: clip error magnitude
+        if error > 100.0:
+            error = 100.0
+        elif error < -100.0:
+            error = -100.0
+
         for i in range(len(self.weights[self.last_direction])):
             if i < len(self.last_state_inputs):
+                # weight update (gradient-like)
                 self.weights[self.last_direction][i] += self.learning_rate * error * self.last_state_inputs[i]
+
+                # small L2 regularization to avoid runaway weights
+                self.weights[self.last_direction][i] *= (1.0 - 1e-4 * self.learning_rate)
+
+                # clip weights to a reasonable range
+                if self.weights[self.last_direction][i] > 5.0:
+                    self.weights[self.last_direction][i] = 5.0
+                elif self.weights[self.last_direction][i] < -5.0:
+                    self.weights[self.last_direction][i] = -5.0
 
         # Move to the new state for the next step so subsequent learns use updated context
         if isinstance(new_inputs, list) and len(new_inputs) == self.input_size:
@@ -359,10 +383,27 @@ class NeuralAgent(Agent):
         else:
             self.farol_coord = None
 
+        # Use only local observations for shaping rewards (no global objective coordinates)
         current_inputs = self.get_inputs(obs)
         self.last_state_inputs = current_inputs
 
-        # Pass the environment to age() so the agent can avoid invalid moves
+        # record whether we see the objective before acting
+        prev_seen_dist = None
+        if self.ultima_observacao:
+            for dir_items in self.ultima_observacao.values():
+                # Some sensors (FarolSensor) return non-list values; only iterate lists
+                if isinstance(dir_items, list) and dir_items:
+                    for entry in dir_items:
+                        # entry expected (name, dist)
+                        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                            name, dist = entry[0], entry[1]
+                            if name == '*':
+                                prev_seen_dist = dist
+                                break
+                if prev_seen_dist is not None:
+                    break
+
+        # Act
         accao = self.age(ambiente)
 
         if ambiente.agir(accao, self):
@@ -371,11 +412,38 @@ class NeuralAgent(Agent):
             self.recent_positions.append((self.x, self.y))
             if len(self.recent_positions) > self.max_memory:
                 self.recent_positions.pop(0)
-            reward = -0.05
+            reward = -0.01  # small step cost (reduced)
         else:
-            reward = -0.5
+            reward = -0.2  # reduced penalty for invalid move
 
+        # After acting, observe again and shape rewards only from sensors
         new_obs = ambiente.observacaoPara(self)
+        new_seen_dist = None
+        if new_obs:
+            for dir_items in new_obs.values():
+                if isinstance(dir_items, list) and dir_items:
+                    for entry in dir_items:
+                        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                            name, dist = entry[0], entry[1]
+                            if name == '*':
+                                new_seen_dist = dist
+                                break
+                if new_seen_dist is not None:
+                    break
+
+        # Reward for seeing the objective (closer = larger)
+        if new_seen_dist is not None:
+            reward += 4.0 / max(new_seen_dist, 1)  # lower scaling
+            if new_seen_dist == 1:
+                reward += 15.0  # lower adjacency bonus
+
+        # Reward if our observed distance to object decreased
+        if prev_seen_dist is not None and new_seen_dist is not None and new_seen_dist < prev_seen_dist:
+            reward += (prev_seen_dist - new_seen_dist) * 1.5
+
+        # update last_seen_goal from sensors only
+        self.last_seen_goal = new_seen_dist
+
         new_inputs = self.get_inputs(new_obs)
         self.learn(reward, new_inputs)
 
