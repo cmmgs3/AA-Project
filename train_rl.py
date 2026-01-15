@@ -23,13 +23,6 @@ EPSILON_END = 0.02
 EPSILON_DECAY = 0.9995
 CHECKPOINT_INTERVAL = 200  # episodes between checkpoints
 TOP_K = 5  # keep top-K weight snapshots by episode performance
-# Stability and rollback
-STABILITY_WINDOW = 200
-ROLLBACK_INTERVAL = 500
-ROLLBACK_THRESHOLD = 0.6  # if recent mean < threshold * best_mean -> rollback
-
-# Curriculum: use easier scenarios for initial episodes
-CURRICULUM_EPISODES = 300
 
 # Learning rate schedule (start larger, decay)
 LR_START = 0.3
@@ -225,8 +218,6 @@ def main():
     agent.discount_factor = 0.95
 
     best_performance = float('-inf')
-    no_improvement_counter = 0
-    last_rollback_episode = -ROLLBACK_INTERVAL
 
     for ep in range(1, EPISODES + 1):
         # Anneal epsilon
@@ -236,38 +227,11 @@ def main():
         agent.learning_rate = max(LR_END, agent.learning_rate * LR_DECAY)
 
         # Choose a random scenario for this episode
-        # Curriculum: use easier scenarios early on
-        if ep <= CURRICULUM_EPISODES:
-            # prefer truly easy scenarios (indices 0 and 4)
-            scenario = random.choice([ENV_SCENARIOS[0], ENV_SCENARIOS[4]])
-        else:
-            scenario = random.choice(ENV_SCENARIOS)
+        scenario = random.choice(ENV_SCENARIOS)
 
         result = evaluate_episode(agent, scenario)
 
         perf = result['performance']
-
-        # Stability monitoring: rollback if recent performance drops significantly
-        if ep > STABILITY_WINDOW and top_k_list:
-            recent_mean_perf = sum(perf_history[-STABILITY_WINDOW:]) / STABILITY_WINDOW
-            if recent_mean_perf < ROLLBACK_THRESHOLD * best_performance:
-                # debounce rollbacks so we don't spam and destabilize training
-                if (ep - last_rollback_episode) >= ROLLBACK_INTERVAL:
-                    print(f"Performance drop detected at ep {ep} (recent_mean={recent_mean_perf:.2f} < {ROLLBACK_THRESHOLD}*best={best_performance:.2f}). Rolling back to best weights from episode {top_k_list[0]['episode']}")
-                    agent.set_weights(top_k_list[0]['weights'])
-                    last_rollback_episode = ep
-                    # reduce epsilon and learning rate slightly to stabilize search
-                    epsilon = max(EPSILON_END, epsilon * 0.5)  # reduce epsilon
-                    agent.epsilon = epsilon
-                    agent.learning_rate = max(LR_END, agent.learning_rate * 0.5)  # reduce learning rate
-                    no_improvement_counter = 0
-                else:
-                    # skip rollback (debounced)
-                    no_improvement_counter += 1
-            else:
-                no_improvement_counter += 1
-        else:
-            no_improvement_counter += 1
 
         if perf > best_performance:
             best_performance = perf
